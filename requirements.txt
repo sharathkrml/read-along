@@ -1,0 +1,9 @@
+mlx-vlm>=0.7.11
+fermion-research[mlx]>=0.2.15
+pymupdf>=1.24
+sounddevice>=0.5.3
+websockets>=15
+numpy
+pillow
+pyobjc-framework-Vision
+pyobjc-framework-Quartz
