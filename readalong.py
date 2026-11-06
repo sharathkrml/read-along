@@ -38,7 +38,8 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
+# The .app is read-only, so it points this at Application Support.
+DATA = Path(os.environ.get("READALONG_DATA") or ROOT / "data")
 PAGES = DATA / "pages"
 IMAGE = DATA / "current.jpg"
 PDF = DATA / "current.pdf"
@@ -448,21 +449,37 @@ def clean_ocr(text: str) -> list[str]:
     return lines
 
 
-def ocr_lfm3(path: Path) -> list[str]:
+def ocr_lfm3_many(paths: list[Path]) -> list[list[str] | None]:
+    """OCR every image with one model load; None marks a page that fell back to Vision."""
     from mlx_vlm import generate, load
     from mlx_vlm.prompt_utils import apply_chat_template
     from mlx_vlm.utils import load_config
 
     model, processor = load(OCR_MODEL)
+    out: list[list[str] | None] = []
     try:
         config = load_config(OCR_MODEL)
         formatted = apply_chat_template(processor, config, OCR_PROMPT, num_images=1)
-        out = generate(
-            model, processor, formatted, [str(path)],
-            max_tokens=2048, temperature=0.1, top_p=1.0, top_k=50,
-            min_p=0.0, repetition_penalty=1.1, enable_thinking=False,
-        )
-        text = out.text if hasattr(out, "text") else str(out)
+        for path in paths:
+            try:
+                result = generate(
+                    model, processor, formatted, [str(path)],
+                    max_tokens=2048, temperature=0.1, top_p=1.0, top_k=50,
+                    min_p=0.0, repetition_penalty=1.1, enable_thinking=False,
+                )
+                text = result.text if hasattr(result, "text") else str(result)
+                lines = clean_ocr(text)
+                if len(lines) < 3:
+                    raise RuntimeError("the OCR model returned too little text")
+                out.append(lines)
+            except Exception as e:
+                print(f"[ocr] LFM3 failed on {path.name} ({e})", file=sys.stderr)
+                out.append(None)
+            try:
+                import mlx.core as mx
+                mx.clear_cache()
+            except Exception:
+                pass
     finally:
         del model, processor
         gc.collect()
@@ -471,27 +488,57 @@ def ocr_lfm3(path: Path) -> list[str]:
             mx.clear_cache()
         except Exception:
             pass
-    lines = clean_ocr(text)
-    if len(lines) < 3:
+    return out
+
+
+def ocr_lfm3(path: Path) -> list[str]:
+    lines = ocr_lfm3_many([path])[0]
+    if lines is None:
         raise RuntimeError("the OCR model returned too little text")
     return lines
 
 
-def run_ocr(path: Path) -> tuple[list[dict], int, int]:
-    W, H = Image.open(path).size
-    vlines: list[dict] = []
+def run_ocr_many(
+    paths: list[Path], progress=None,
+) -> list[tuple[list[dict], int, int]]:
+    """OCR a batch of images, loading the model once, with per-page Vision fallback."""
+    vision: list[list[dict]] = []
+    for path in paths:
+        try:
+            vision.append(vision_lines(path))
+        except Exception:
+            vision.append([])
+
     try:
-        vlines = vision_lines(path)
-    except Exception:
-        pass
-    try:
-        texts = ocr_lfm3(path)
+        texts = ocr_lfm3_many(paths)
     except Exception as e:
-        if not vlines:
-            raise
-        texts = [v["text"] for v in usable_lines(vlines)]
+        texts = [None] * len(paths)
         print(f"[ocr] LFM3 failed ({e}); using macOS Vision text", file=sys.stderr)
-    return map_lines(texts, vlines), W, H
+
+    out = []
+    readable = 0
+    for i, path in enumerate(paths):
+        lines = texts[i]
+        if lines is None:
+            vlines = vision[i]
+            lines = [v["text"] for v in usable_lines(vlines)] if vlines else []
+        W, H = Image.open(path).size
+        mapped = map_lines(lines, vision[i])
+        if mapped:
+            readable += 1
+        else:
+            print(f"[ocr] no text found on {path.name}", file=sys.stderr)
+        out.append((mapped, W, H))
+        if progress:
+            progress(i + 1, len(paths))
+
+    if paths and readable == 0:
+        raise RuntimeError("the OCR model returned no text")
+    return out
+
+
+def run_ocr(path: Path) -> tuple[list[dict], int, int]:
+    return run_ocr_many([path])[0]
 
 
 def _char_width(c: str) -> float:
@@ -732,12 +779,13 @@ def pdf_lines(words: list, page_w: float, page_h: float) -> list[dict]:
     return lines
 
 
-def pdf_pages(path: Path) -> list[dict]:
+def pdf_pages(path: Path, progress=None) -> list[dict]:
     import pymupdf
 
     clear_pages()
     doc = pymupdf.open(path)
-    pages = []
+    pages: list[dict] = []
+    jobs: list[tuple[int, Path]] = []
     try:
         for i, page in enumerate(doc):
             pix = page.get_pixmap(dpi=150)
@@ -748,27 +796,39 @@ def pdf_pages(path: Path) -> list[dict]:
             if len(words) >= 10:
                 lines = pdf_lines(words, page.rect.width, page.rect.height)
             else:
-                # scanned page: fall back to the OCR pipeline
-                lines, _, _ = run_ocr(img)
+                # image-only page: OCR it after every page has been rendered
+                lines = []
+                jobs.append((i, img))
             pages.append({"image": img.name, "width": W, "height": H, "lines": lines})
     finally:
         doc.close()
+
+    if jobs:
+        if progress:
+            progress(0, len(jobs))  # includes the model load before page 1
+        results = run_ocr_many([img for _, img in jobs], progress)
+        for (i, _), (lines, W, H) in zip(jobs, results):
+            pages[i]["lines"] = lines
+            pages[i]["width"] = W
+            pages[i]["height"] = H
     return pages
 
 
-def image_pages(path: Path) -> list[dict]:
+def image_pages(path: Path, progress=None) -> list[dict]:
     clear_pages()
     out = PAGES / "p000.jpg"
     Image.open(path).convert("RGB").save(out, "JPEG", quality=95)
-    lines, W, H = run_ocr(path)
+    if progress:
+        progress(0, 1)
+    lines, W, H = run_ocr_many([path], progress)[0]
     return [{"image": out.name, "width": W, "height": H, "lines": lines}]
 
 
-def process_source(path: Path) -> tuple[dict, list[dict]]:
+def process_source(path: Path, progress=None) -> tuple[dict, list[dict]]:
     if path.suffix.lower() == ".pdf":
-        pages = pdf_pages(path)
+        pages = pdf_pages(path, progress)
     else:
-        pages = image_pages(path)
+        pages = image_pages(path, progress)
     model = build_pages_model(pages)
     attach_word_boxes(model)
     save_cache(path, pages)
@@ -777,7 +837,7 @@ def process_source(path: Path) -> tuple[dict, list[dict]]:
 
 def save_cache(path: Path, pages: list[dict]) -> None:
     st = os.stat(path)
-    CACHE.parent.mkdir(exist_ok=True)
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps({
         "version": 2, "mtime": st.st_mtime, "size": st.st_size, "pages": pages,
     }, indent=1))
@@ -856,14 +916,19 @@ class ASR:
                 if self.healthy(p):
                     self.port = p
                     return
-            bin_ = shutil.which("fermion") or str(Path(sys.executable).with_name("fermion"))
-            if not Path(bin_).exists():
-                raise RuntimeError("fermion not found — pip install 'fermion-research[mlx]'")
-            DATA.mkdir(exist_ok=True)
+            helper = os.environ.get("READALONG_FERMION")
+            if helper:
+                cmd = [sys.executable, helper]
+            else:
+                bin_ = shutil.which("fermion") or str(Path(sys.executable).with_name("fermion"))
+                if not Path(bin_).exists():
+                    raise RuntimeError("fermion not found — pip install 'fermion-research[mlx]'")
+                cmd = [bin_]
+            DATA.mkdir(parents=True, exist_ok=True)
             log = open(DATA / "asr.log", "ab")
             self.port = self._free_port(ASR_PORT)
             self.proc = subprocess.Popen(
-                [bin_, "serve", ASR_MODEL, "--port", str(self.port)],
+                cmd + ["serve", ASR_MODEL, "--port", str(self.port)],
                 stdout=log, stderr=log, start_new_session=True,
             )
             self.on_status("loading")
@@ -1020,6 +1085,9 @@ class App:
         self.partial = ""
         self.ocr_status = "idle"
         self.ocr_error = ""
+        self.ocr_done = 0
+        self.ocr_total = 0
+        self.ocr_gen = 0
         self._want_listen = False
         self.asr = ASR(self._on_text, self._on_status)
 
@@ -1049,22 +1117,52 @@ class App:
         self.ocr_status = "done"
         return True
 
-    def ocr_now(self) -> None:
+    def _begin_ocr(self) -> int:
         with self.lock:
             if self.ocr_status == "running":
-                return
+                return 0
+            self.ocr_gen += 1
             self.ocr_status = "running"
             self.ocr_error = ""
-            path = self.source_path
-        try:
-            model, pages = process_source(path)
+            self.ocr_done = 0
+            self.ocr_total = 0
+            return self.ocr_gen
+
+    def ocr_now(self) -> None:
+        """Run OCR in the calling thread (startup, --ocr-only)."""
+        gen = self._begin_ocr()
+        if gen:
+            self._run_ocr(gen, self.source_path)
+
+    def start_ocr(self) -> None:
+        """Start OCR in the background; the builder polls /state and /model."""
+        gen = self._begin_ocr()
+        if gen:
+            threading.Thread(
+                target=self._run_ocr, args=(gen, self.source_path), daemon=True,
+            ).start()
+
+    def _run_ocr(self, gen: int, path: Path) -> None:
+        def progress(done: int, total: int) -> None:
             with self.lock:
+                if gen == self.ocr_gen:
+                    self.ocr_done = done
+                    self.ocr_total = total
+
+        try:
+            model, pages = process_source(path, progress=progress)
+            with self.lock:
+                if gen != self.ocr_gen:
+                    return
                 self.model = model
                 self.pages = pages
                 self.aligner = Aligner([w["norm"] for w in model["words"]])
                 self.ocr_status = "done"
+                self.ocr_done = self.ocr_total
         except Exception as e:
             with self.lock:
+                if gen != self.ocr_gen:
+                    return
                 self.ocr_status = "error"
                 self.ocr_error = str(e)
 
@@ -1073,7 +1171,8 @@ class App:
             s = {
                 "status": self.status, "error": self.error, "partial": self.partial,
                 "rms": self.asr.rms, "ocr_status": self.ocr_status,
-                "ocr_error": self.ocr_error, "model_ready": bool(self.model),
+                "ocr_error": self.ocr_error, "ocr_done": self.ocr_done,
+                "ocr_total": self.ocr_total, "model_ready": bool(self.model),
                 "pos": 0, "total": 0, "current": None, "next": None,
                 "page": 0, "next_page": None,
                 "current_boxes": [], "next_boxes": [], "confidence": 0.0,
@@ -1159,7 +1258,7 @@ class App:
         raw = data_url.split(",", 1)[-1]
         data = base64.b64decode(raw)
         is_pdf = name.lower().endswith(".pdf") or data[:5] == b"%PDF-" or "application/pdf" in data_url[:40]
-        DATA.mkdir(exist_ok=True)
+        DATA.mkdir(parents=True, exist_ok=True)
         if is_pdf:
             source = PDF
             source.write_bytes(data)
@@ -1180,12 +1279,15 @@ class App:
             pass
         clear_pages()
         with self.lock:
+            self.ocr_gen += 1  # discard a page still being read
             self.source_path = source
             self.model = None
             self.pages = None
             self.aligner = None
             self.ocr_status = "idle"
             self.ocr_error = ""
+            self.ocr_done = 0
+            self.ocr_total = 0
             self.status = "idle"
             self.partial = ""
 
@@ -1323,11 +1425,8 @@ class Handler(BaseHTTPRequestHandler):
                 APP.upload(body["data"], body.get("name", ""))
                 self._json({"ok": True})
             elif p == "/ocr":
-                APP.ocr_now()
-                if APP.ocr_status == "error":
-                    self._json({"error": APP.ocr_error}, 500)
-                else:
-                    self._json({"ok": True, "model": APP.model})
+                APP.start_ocr()
+                self._json({"ok": True})
             elif p == "/script":
                 self._json({"ok": True, "model": APP.set_script(
                     int(body.get("page", 0)), body.get("text", ""))})
@@ -1388,6 +1487,7 @@ height:calc(100vh - 57px)}
 max-width:100%;max-height:100%;margin:14px}
 #page{display:block;max-width:100%;max-height:calc(100vh - 85px);width:auto;height:auto;
 border-radius:6px;box-shadow:0 18px 60px #0009}
+.wait{color:var(--dim);font-size:14px;padding:8px 0}
 #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 #textpane{overflow-y:auto;border-left:1px solid var(--line);padding:26px 30px 46vh}
 #text{font:26px/1.65 ui-serif,"New York",Georgia,serif}
@@ -1420,7 +1520,7 @@ text-underline-offset:6px;text-decoration-thickness:2px}
 </header>
 <div id="stage">
   <div id="imgbox">
-    <img id="page" src="/image" alt="page">
+    <img id="page" alt="page" style="visibility:hidden" onerror="this.style.visibility='hidden'">
     <svg id="overlay" xmlns="http://www.w3.org/2000/svg">
       <g id="nextg"></g><g id="curg"></g>
     </svg>
@@ -1435,8 +1535,12 @@ let model=null, st=null, lastGroup=-1, polling=false, page=0;
 async function boot(){
   try{
     const m=await (await fetch('/model')).json();
-    if(m && m.lines && m.lines.length){ model=m; render(); }
-    else setTimeout(boot,800);
+    if(m && m.lines && m.lines.length){
+      model=m; $('page').style.visibility='visible';
+      $('page').src='/image?t='+Date.now(); render();
+    } else {
+      setTimeout(boot,800);
+    }
   }catch(e){ setTimeout(boot,1200); }
   if(!polling){ polling=true; poll(); }
 }
@@ -1500,7 +1604,20 @@ function paint(){
   $('meter').style.width=Math.min(100,(s.rms||0)*500)+'%';
   $('toggle').textContent=s.status==='listening'?'Stop':(s.status==='loading'?'Loading…':'Start listening');
   $('toggle').disabled=s.status==='loading';
-  if(!model) return;
+  if(!model){
+    $('status').textContent=s.ocr_status==='error'?'error':'reading';
+    $('status').className='chip'+(s.ocr_status==='error'?' bad':'');
+    $('status').title=s.ocr_error||'';
+    $('toggle').disabled=true;
+    if(s.ocr_status==='error'){
+      $('text').textContent='Could not read the page: '+(s.ocr_error||'unknown error');
+    } else {
+      const total=s.ocr_total||0, done=s.ocr_done||0;
+      const wait=total?`Reading page ${Math.min(done+1,total)} of ${total}…`:'Reading the page…';
+      $('text').innerHTML='<div class="wait">'+wait+' first run can take a few minutes.</div>';
+    }
+    return;
+  }
   if(s.page!=null && s.page!==page){
     page=s.page;
     const p=pg();
@@ -1659,9 +1776,9 @@ async function post(url,body){
 
 async function runOCR(){
   $('msg').textContent='Reading the file… a scanned page can take a while; a text PDF is instant.';
+  model=null; page=0;
   const j=await post('/ocr');
   if(j.error){ $('msg').textContent=j.error; return; }
-  model=j.model; page=0; render(); $('msg').textContent='';
 }
 
 async function upload(file){
@@ -1677,7 +1794,12 @@ async function upload(file){
 async function tick(){
   try{
     const s=await (await fetch('/state')).json();
-    if(s.ocr_status==='running') $('msg').textContent='Reading the page…';
+    if(s.ocr_status==='running'){
+      const total=s.ocr_total||0, done=s.ocr_done||0;
+      $('msg').textContent=total
+        ? `Reading scanned page ${Math.min(done+1,total)} of ${total}…`
+        : 'Reading the page…';
+    }
     else if(s.ocr_status==='error') $('msg').textContent=s.ocr_error;
     else if(s.error) $('msg').textContent=s.error;
     else if(s.model_ready && (!model || !model.lines.length)){
@@ -1726,7 +1848,7 @@ def main() -> None:
     args = ap.parse_args()
 
     global APP
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
 
     if args.image:
         src = Path(args.image).expanduser()

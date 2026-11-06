@@ -59,7 +59,18 @@ readalong/
   ocr.jpg             the handwritten sample
   ocr.pdf             the 4-page text PDF sample
   ocr-higlighted.jpg  the original hand-drawn style reference (unused by the app)
-  data/               generated workspace (gitignored)
+  fermion_main.py     entry point for the bundled fermion CLI
+  macapp/
+    main.swift        native WKWebView shell, backend lifecycle, menus
+    Info.plist        bundle identity, mic usage string, local-network ATS
+    AppIcon.icns
+  Makefile            make app / dmg / run / test / clean shortcuts
+  scripts/
+    build_app.sh      build ReadAlong.app (Python runtime + packages + binary)
+    build_dmg.sh      build the distributable .dmg
+    make_icon.py      regenerate the icon
+    requirements.lock.txt
+  data/               generated workspace (gitignored; dev only)
     current.jpg       image source, if the current document is an image
     current.pdf       PDF source, if the current document is a PDF
     pages/
@@ -70,7 +81,9 @@ readalong/
     asr.log           speech server log
 ```
 
-`data/` is disposable. Delete it and the app re-processes the source.
+`data/` is disposable. Delete it and the app re-processes the source. The
+installed `.app` uses `~/Library/Application Support/ReadAlong/` instead, set
+through `READALONG_DATA`.
 
 ---
 
@@ -182,10 +195,13 @@ words and use `PDFPage.selection(for: NSRange)` or
 ### 4.2 Image or scanned PDF (the OCR path)
 
 `image_pages(path)` copies the image to `data/pages/p000.jpg`, then calls
-`run_ocr(path)`. `pdf_pages` calls `run_ocr(img)` for a page whose text layer has
-fewer than 10 words.
+`run_ocr(path)`. `pdf_pages` renders every page, collects the pages whose text
+layer has fewer than 10 words, then calls `run_ocr_many(jobs)`. That loads
+LFM3-VL **once** for the whole document instead of once per page; the OCR thread
+reports `(done, total)` through `App.start_ocr`, which the builder and reader
+show as "Reading page 3 of 20…". A single page still goes through `run_ocr`.
 
-`run_ocr` has two independent halves:
+`run_ocr_many` has two independent halves per page:
 
 #### A. Text — LFM3-VL
 
@@ -810,10 +826,10 @@ internal or personal app; Option B is the long-term distribution path.
 |---|---|
 | text model | `norm_token`, `norm_text`, `tokenize`, `build_pages_model`, `build_model`, `group_at`, `group_boxes` |
 | alignment | `Aligner._score`, `Aligner._anchor`, `Aligner.update` |
-| OCR / boxes | `vision_lines`, `usable_lines`, `map_lines`, `clean_ocr`, `ocr_lfm3`, `run_ocr`, `_char_width`, `segment_line`, `_boxes`, `_text_band`, `attach_word_boxes` |
+| OCR / boxes | `vision_lines`, `usable_lines`, `map_lines`, `clean_ocr`, `ocr_lfm3`, `ocr_lfm3_many`, `run_ocr`, `run_ocr_many`, `_char_width`, `segment_line`, `_boxes`, `_text_band`, `attach_word_boxes` |
 | documents | `clear_pages`, `pdf_lines`, `pdf_pages`, `image_pages`, `process_source`, `save_cache`, `load_cache` |
 | speech | `ASR` (`ensure`, `start`, `_open_mic`, `_run`, `_session`, `_send`, `stop`, `shutdown`), `tail` |
-| app | `App` (`load`, `ocr_now`, `state`, `start`, `_start_bg`, `stop`, `jump`, `set_script`, `upload`, `shutdown`) |
+| app | `App` (`load`, `_begin_ocr`, `ocr_now`, `start_ocr`, `_run_ocr`, `state`, `start`, `_start_bg`, `stop`, `jump`, `set_script`, `upload`, `shutdown`) |
 | export | `export_image` |
 | web | `Handler` (`do_GET`, `_serve_page`, `do_POST`), `READER_HTML`, `BUILDER_HTML` |
 | startup | `main`, `_sigterm`, `_startup`, `_ensure_asr` |
@@ -852,4 +868,32 @@ and page metadata.
 - No zip export of all PDF pages; export is one page at a time.
 - No embedding-based semantic re-anchoring; the fuzzy DP + anchor is enough for
   reading aloud.
-- No native Mac UI yet; the browser is the POC's UI.
+- No native rewrite; the reader/builder are still HTML. The `.app` is a native
+  WKWebView shell around the same Python process, so the UI code is shared
+  between `python readalong.py` and the installed app.
+
+---
+
+## 16. The installed app
+
+`macapp/main.swift` owns the window, the menu bar, microphone permission and the
+backend process. On launch it:
+
+1. Reserves a free loopback port.
+2. Runs the bundled interpreter:
+   `Resources/backend/python/bin/python3.12 -u readalong.py --no-browser --port N`
+   with `PYTHONPATH=Resources/backend/site-packages`,
+   `READALONG_DATA=~/Library/Application Support/ReadAlong` and
+   `READALONG_FERMION=Resources/backend/fermion_main.py`.
+3. Polls `GET /state` until the server answers, then loads `/` in a WKWebView.
+4. On quit, sends `SIGTERM` to the backend; `readalong.py`'s handler shuts the
+   speech server down.
+
+The `fermion` console script is replaced by `fermion_main.py`, because the
+bundle has no `bin/fermion`. The mic is primed with `AVCaptureDevice` so TCC
+attributes access to ReadAlong rather than the child Python process.
+
+`scripts/build_app.sh` copies a uv-managed CPython 3.12 and the locked packages
+into `Contents/Resources/backend`, compiles `main.swift` with `swiftc`, and
+ad-hoc signs the result. `scripts/build_dmg.sh` wraps the app and an
+`/Applications` symlink in a UDZO image.

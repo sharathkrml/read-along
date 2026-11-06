@@ -5,7 +5,62 @@ while you read it aloud. Amber box = the phrase you are on. Blue box = the next
 phrase. The highlight follows your voice, and the page turns itself when you
 cross a page boundary.
 
-## Setup (macOS, Apple Silicon)
+## macOS app
+
+Download `ReadAlong-<version>.dmg`, open it, and drag **ReadAlong** onto
+Applications. Apple Silicon, macOS 14 or newer.
+
+The app carries its own Python runtime and packages, so users do not need
+Python, Homebrew, or a terminal. Documents, the OCR cache and the speech log
+live in `~/Library/Application Support/ReadAlong`; the backend log is at
+`~/Library/Logs/ReadAlong/backend.log`.
+
+The first launch downloads Phonon-2.5 English (~158 MB) for speech. OCR of an
+image or a scanned PDF downloads LFM3-VL 4-bit (~1.6 GB) on first use; a PDF with
+a text layer needs neither. macOS asks for microphone access on first launch.
+
+The build is ad-hoc signed, not notarized. If Gatekeeper refuses the first
+launch, right-click the app and choose **Open**, or remove the download flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ReadAlong.app
+```
+
+### Build the app
+
+Requirements: Apple Silicon Mac, Xcode command line tools, and
+[uv](https://docs.astral.sh/uv/).
+
+```bash
+make dmg             # dist/ReadAlong-1.0.0.dmg
+make run             # build and open build/ReadAlong.app
+make dev             # run the Python app from .venv
+make test            # run test_align.py
+make clean           # remove build/ and dist/
+make help            # all targets
+```
+
+`make dmg VERSION=1.1.0` builds a differently versioned DMG. To sign and
+notarize for distribution, pass a Developer ID identity and a `notarytool`
+keychain profile:
+
+```bash
+make dmg \
+  CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+  NOTARY_PROFILE=readalong
+```
+
+`scripts/requirements.lock.txt` pins the packages baked into the app. Refresh it
+after changing `requirements.txt`:
+
+```bash
+make lock
+```
+
+The scripts remain usable directly: `./scripts/build_app.sh` and
+`./scripts/build_dmg.sh`.
+
+## Development setup (macOS, Apple Silicon)
 
 ```bash
 python3.12 -m venv .venv
@@ -18,7 +73,7 @@ image or a scanned PDF downloads LFM3-VL 4-bit (~1.6 GB) on first use; a PDF
 with a text layer needs neither. macOS will ask for microphone access the first
 time you press Start.
 
-## Run
+## Run from source
 
 ```bash
 python readalong.py
@@ -50,7 +105,9 @@ python readalong.py --no-asr             # UI only, no speech server
 1. **PDFs with a text layer** are read directly with PyMuPDF: the words and
    their exact boxes come from the file, so there is no OCR step and no wait.
    **Scanned PDFs and images** go through LFM3-VL, macOS Vision line boxes, and
-   an ink-gap word segmenter.
+   an ink-gap word segmenter. A PDF of image-only pages is rendered once and
+   OCR'd page by page with a single model load; the builder and reader show
+   which page is being read.
 2. `fermion serve phonon-2.5-en` streams partial transcripts over a local
    WebSocket.
 3. A monotonic fuzzy alignment moves the cursor through the script. It only
@@ -67,6 +124,8 @@ guide to porting this POC to a native Mac app.
 
 - Word boxes on handwriting are heuristic. If a line is misread, fix the text
   in the builder and the boxes are re-cut. PDF text boxes are exact.
+- A scanned PDF is OCR'd page by page. A long PDF can take a few minutes the
+  first time; the result is cached, so later opens are instant.
 - macOS Vision supplies the line geometry for images. If its accurate model
   fails on the Neural Engine, the app falls back to the fast model and some
   boxes may be missing; a reboot restores the accurate one. PDFs are unaffected.
