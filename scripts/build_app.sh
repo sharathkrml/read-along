@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build ReadAlong.app: bundled Python runtime + deps, compiled native shell, ad-hoc sign.
+# Build Read Along.app: bundled Python runtime + deps, compiled native shell, ad-hoc sign.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,7 +12,7 @@ APP="$BUILD/$NAME.app"
 DEPS="$BUILD/deps"
 LOCK="$ROOT/scripts/requirements.lock.txt"
 
-[ "$(uname -m)" = "arm64" ] || { echo "ReadAlong needs Apple Silicon (MLX)." >&2; exit 1; }
+[ "$(uname -m)" = "arm64" ] || { echo "Read Along needs Apple Silicon (MLX)." >&2; exit 1; }
 command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/" >&2; exit 1; }
 
 clone() {
@@ -37,8 +37,16 @@ if [ ! -d "$DEPS" ] || [ "$(cat "$STAMP" 2>/dev/null || true)" != "$WANT" ]; the
   echo "$WANT" > "$STAMP"
 fi
 # fermion-research requires torch, but only its non-Apple-Silicon fallback uses
-# it. ReadAlong runs Phonon on MLX, so drop 600 MB of dead weight.
+# it. Read Along runs Phonon on MLX, so drop 600 MB of dead weight.
 rm -rf "$DEPS/torch" "$DEPS/torchgen" "$DEPS/functorch" "$DEPS"/torch-*.dist-info
+# Read Along uses images only (no video), never datasets/training, and PyMuPDF
+# only needs its basic text/render path. Drop the rest of the dead weight.
+rm -rf "$DEPS/datasets" "$DEPS"/datasets-*.dist-info \
+       "$DEPS/pyarrow" "$DEPS"/pyarrow-*.dist-info \
+       "$DEPS/pandas" "$DEPS"/pandas-*.dist-info \
+       "$DEPS/cv2" "$DEPS"/opencv_python-*.dist-info \
+       "$DEPS/onnxruntime" "$DEPS"/onnxruntime-*.dist-info \
+       "$DEPS/sympy" "$DEPS"/sympy-*.dist-info "$DEPS/isympy.py"
 
 echo "==> Bundle"
 rm -rf "$APP"
@@ -50,13 +58,14 @@ cp "$ROOT/macapp/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 cp "$ROOT/readalong.py" "$ROOT/fermion_main.py" "$ROOT/ocr.jpg" "$APP/Contents/Resources/backend/"
 [ -f "$ROOT/ocr.pdf" ] && cp "$ROOT/ocr.pdf" "$APP/Contents/Resources/backend/"
+[ ! -f "$ROOT/ocr.pdf" ] && [ -f "$ROOT/ocr-pdf.pdf" ] && cp "$ROOT/ocr-pdf.pdf" "$APP/Contents/Resources/backend/"
 clone "$PY_PREFIX" "$APP/Contents/Resources/backend/python"
 clone "$DEPS" "$APP/Contents/Resources/backend/site-packages"
 
-echo "==> Swift shell"
+echo "==> Swift UI"
 xcrun swiftc -O -target arm64-apple-macos14.0 \
-  -framework Cocoa -framework WebKit -framework AVFoundation -framework UniformTypeIdentifiers \
-  -o "$APP/Contents/MacOS/$NAME" "$ROOT/macapp/main.swift"
+  -framework Cocoa -framework AVFoundation -framework UniformTypeIdentifiers -framework SwiftUI \
+  -o "$APP/Contents/MacOS/$NAME" "$ROOT"/macapp/*.swift
 
 echo "==> Sign ($IDENTITY)"
 if [ "$IDENTITY" = "-" ]; then

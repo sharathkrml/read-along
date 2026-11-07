@@ -1,4 +1,4 @@
-# ReadAlong
+# Read Along
 
 OCR a handwritten page or a PDF, then highlight the words **on the source page**
 while you read it aloud. Amber box = the phrase you are on. Blue box = the next
@@ -7,7 +7,7 @@ cross a page boundary.
 
 ## macOS app
 
-Download `ReadAlong-<version>.dmg`, open it, and drag **ReadAlong** onto
+Download `ReadAlong-<version>.dmg`, open it, and drag **Read Along** onto
 Applications. Apple Silicon, macOS 14 or newer.
 
 The app carries its own Python runtime and packages, so users do not need
@@ -15,9 +15,12 @@ Python, Homebrew, or a terminal. Documents, the OCR cache and the speech log
 live in `~/Library/Application Support/ReadAlong`; the backend log is at
 `~/Library/Logs/ReadAlong/backend.log`.
 
-The first launch downloads Phonon-2.5 English (~158 MB) for speech. OCR of an
-image or a scanned PDF downloads LFM3-VL 4-bit (~1.6 GB) on first use; a PDF with
-a text layer needs neither. macOS asks for microphone access on first launch.
+On first launch, Setup asks before downloading anything. The speech model
+(Phonon-2.5 English, ~158 MB) is required for voice following. The page-reading
+model (LFM3-VL 4-bit, ~1.6 GB) is needed for photos, scanned PDFs, and the
+bundled sample; a PDF with a text layer needs neither. Both run locally and are cached after the first
+download. macOS asks for microphone access on first launch. Models can be
+managed later from **Settings → Models on this Mac**.
 
 The build is ad-hoc signed, not notarized. If Gatekeeper refuses the first
 launch, right-click the app and choose **Open**, or remove the download flag:
@@ -76,29 +79,47 @@ time you press Start.
 ## Run from source
 
 ```bash
-python readalong.py
+make app && open build/ReadAlong.app
 ```
 
-It opens <http://127.0.0.1:8765/>. The builder is at `/builder`.
+The native app wants the bundled Python runtime, so build the shell first.
+Backend-only run for iterating on the UI (point the app at it with
+`READALONG_URL=http://127.0.0.1:8765` when launching the Swift binary):
 
 ```bash
 python readalong.py --image page.jpg     # an image
 python readalong.py --image report.pdf   # a PDF
 python readalong.py --ocr-only           # process and print, then exit
-python readalong.py --no-asr             # UI only, no speech server
+python readalong.py --no-asr             # backend only, no speech server
 ```
 
 ## Use
 
-- **Builder** — drop an image or PDF, press *Run OCR*, correct any misread words
-  in the text box, press *Save text*. For a PDF, use `‹` / `›` to move between
-  pages; the text box edits one page at a time. *Export JPEG* writes the current
-  page with the amber/blue boxes.
-- **Reader** — press *Start listening* (or Space) and read. Click any word to
-  jump. `[` and `]` move one phrase back or forward. If you restart a line just
-  above the cursor, or skip ahead and start a nearby line, the highlight snaps
-  to it; the text pane and page follow automatically.
-- Already-read words dim; the next four words are underlined.
+- **Library** — import a PDF or image from the sidebar, or drop it anywhere in
+  the window. Documents keep their own source, reading cache, and saved
+  position. Use the row menu to rename or delete one.
+- **Views** — *Text* reflows the recovered words, *Original* shows the real
+  source page with current/next boxes, and *Split* keeps both in sync.
+  Click any word to jump. Page arrows move to the next or previous source page.
+- **Read to me** — choose an installed macOS voice and speed, then press Play.
+  The highlight follows the actual spoken word. Pause and resume without losing
+  your place.
+- **Follow me** — press Play and read aloud; the existing microphone tracking
+  follows your voice. Both modes share one cursor and saved position.
+- **Present** — a full-screen reading stage. `Esc` returns to the exact phrase.
+- **Edit text** — correct OCR line by line and export a proof JPEG when needed.
+- **Presentation-ready text** — multi-column slides are read down each column,
+  not across gutters. Headings, bullets, wrapped paragraphs, tags, and
+  label/value rows become distinct readable blocks while the original source
+  boxes and voice alignment remain intact.
+- **Auto OCR** — printed dark slides use macOS Vision; handwriting still uses
+  the page-reading model. Older jumbled OCR caches are upgraded once, and pages
+  that needed the old handwriting mapping are reprocessed automatically.
+
+Keyboard: `Space` toggles play/listen in reader or source canvas (never while typing), `[` / `]` move one
+phrase, arrow keys browse source pages only when the source canvas owns input, `Cmd+F` finds text,
+`Cmd+1/2/3` switch panes, `Shift+Cmd+F` enters Focus, `Cmd+Plus/Minus/Equals` zooms the focused pane,
+and `Cmd+O` imports a document.
 
 ## How it works
 
@@ -106,7 +127,7 @@ python readalong.py --no-asr             # UI only, no speech server
    their exact boxes come from the file, so there is no OCR step and no wait.
    **Scanned PDFs and images** go through LFM3-VL, macOS Vision line boxes, and
    an ink-gap word segmenter. A PDF of image-only pages is rendered once and
-   OCR'd page by page with a single model load; the builder and reader show
+   OCR'd page by page with a single model load; the import card and reader show
    which page is being read.
 2. `fermion serve phonon-2.5-en` streams partial transcripts over a local
    WebSocket.
@@ -123,7 +144,7 @@ guide to porting this POC to a native Mac app.
 ## Limits
 
 - Word boxes on handwriting are heuristic. If a line is misread, fix the text
-  in the builder and the boxes are re-cut. PDF text boxes are exact.
+  with **Edit text** and the boxes are re-cut. PDF text boxes are exact.
 - A scanned PDF is OCR'd page by page. A long PDF can take a few minutes the
   first time; the result is cached, so later opens are instant.
 - macOS Vision supplies the line geometry for images. If its accurate model

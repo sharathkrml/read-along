@@ -1,4 +1,4 @@
-# ReadAlong — build and packaging shortcuts.
+# Read Along — build and packaging shortcuts.
 SHELL := /bin/bash
 
 VERSION ?= 1.0.0
@@ -19,7 +19,7 @@ help:
 	  'make app     build build/ReadAlong.app' \
 	  'make dmg     build dist/ReadAlong-$(VERSION).dmg' \
 	  'make run     build the app and open it' \
-	  'make dev     run the Python app from .venv' \
+	  'make dev     backend-only run for native UI iteration' \
 	  'make test    run the aligner checks' \
 	  'make icon    regenerate macapp/AppIcon.icns' \
 	  'make lock    refresh scripts/requirements.lock.txt' \
@@ -41,10 +41,13 @@ run: app
 	open "$(APP)"
 
 dev:
-	.venv/bin/python readalong.py
+	@echo "Native UI: run 'make app' then open build/ReadAlong.app."
+	@echo "Backend only (for UI iteration): .venv/bin/python readalong.py --port 8765"
 
 test:
 	.venv/bin/python test_align.py
+	.venv/bin/python test_library.py
+	./scripts/test_native.sh
 
 icon:
 	.venv/bin/python scripts/make_icon.py

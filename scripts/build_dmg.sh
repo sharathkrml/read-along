@@ -1,9 +1,10 @@
 #!/bin/bash
-# Build ReadAlong.dmg from a fresh app bundle.
+# Build the Read Along DMG from a fresh app bundle.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NAME="ReadAlong"
+VOLNAME="Read Along"
 VERSION="${VERSION:-1.0.0}"
 BUILD="$ROOT/build"
 DIST="$ROOT/dist"
@@ -26,11 +27,19 @@ mkdir -p "$BUILD/dmg" "$(dirname "$DMG")"
 # Move the app into the staging folder instead of duplicating 1+ GB.
 mv "$APP" "$BUILD/dmg/"
 ln -s /Applications "$BUILD/dmg/Applications"
-TMP_DMG="$DMG.$$.tmp.dmg"  # unique: a detached image can keep an old path busy
+sync
+# Build to /tmp, not `dist` or `$TMPDIR`: a synced Documents folder can return
+# "Resource busy" for a large hdiutil output, and the per-user TMPDIR failed
+# verification for the 750 MB app. The final `mv` is a rename.
+TMP_DMG="/tmp/$NAME-$VERSION.$$.tmp.dmg"
 trap 'rm -f "$TMP_DMG"; mv "$BUILD/dmg/$NAME.app" "$APP" 2>/dev/null || true; rm -rf "$BUILD/dmg"' EXIT
 rm -f "$TMP_DMG"
-# Build to a temp name: a detached image can leave the final path busy.
-hdiutil create -volname "$NAME" -srcfolder "$BUILD/dmg" -ov -format UDZO "$TMP_DMG" >/dev/null
+DMG_LOG="$BUILD/dmg.log"
+for attempt in 1 2 3; do
+  if hdiutil create -volname "$VOLNAME" -srcfolder "$BUILD/dmg" -ov -format UDZO "$TMP_DMG" >"$DMG_LOG" 2>&1; then break; fi
+  if [ "$attempt" = 3 ]; then cat "$DMG_LOG" >&2; echo "DMG creation failed: $TMP_DMG" >&2; exit 1; fi
+  sleep 2
+done
 for attempt in 1 2 3; do
   if hdiutil verify "$TMP_DMG" >/dev/null 2>&1; then break; fi
   if [ "$attempt" = 3 ]; then echo "DMG verification failed: $TMP_DMG" >&2; exit 1; fi

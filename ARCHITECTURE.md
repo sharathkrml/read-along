@@ -1,10 +1,59 @@
-# ReadAlong — how it works
+# Read Along — how it works
 
 A detailed reference for the POC and for porting it to a native Mac app.
 
 The short version: a page is turned into a list of words with boxes; a live speech
 stream is matched against that list; the cursor moves; the UI draws boxes and
 scrolls.
+
+## Recent changes (2026-11-07)
+
+- Visible name is **Read Along**; internal identifiers, bundle filename and
+  data/log paths stay `ReadAlong` so existing installs keep working.
+- First launch serves a `/setup` wizard: Welcome → Speech (158 MB) → Page
+  reading (1.6 GB) → Ready. `GET /setup/status`, `POST /setup/download` and
+  `POST /setup/finish` back it. Models are not in the DMG; speech lands in
+  `~/.cache/fermion`, OCR in `~/.cache/huggingface` or `DATA/models/ocr`.
+- OCR has an opt-in **Printed text (fast)** path: `POST /ocr {"fast":true}`,
+  `--ocr-only --fast`, and the import quality selector use macOS Vision text
+  and skip LFM3. Handwriting still uses LFM3 by default.
+- Source images are capped at 2000 px before Vision/LFM3/segmentation.
+- `Aligner` now indexes word positions and caches fuzzy scores; a partial
+  update is ~0.2–0.4 ms instead of 19–26 ms.
+- The reader only repaints spans/SVG when `pos`/group/boxes change; page turns
+  use the HTTP cache.
+- The bundle drops `datasets`, `pyarrow`, `pandas`, `cv2`, `onnxruntime` and
+  `sympy`: app ~755 MB, DMG ~400 MB.
+- `build_dmg.sh` builds in `/tmp` and retries `hdiutil create`; a synced
+  Documents folder returned “Resource busy” for large images.
+- The UI is the native SwiftUI shell in `macapp/` (NavigationSplitView, source
+  list, `NSTextView` reading stage with temporary-attribute highlights,
+  `Canvas` box overlay, AppKit player bar). There is no browser UI and no
+  bundled HTML.
+- First launch runs the last two (invisible) setup steps inside Settings and,
+  when a scan needs OCR, in an inline model-setup card in the reader pane;
+  there is no wizard page you must click through, and none of the
+  "Welcome/Setup/Builder" routes are exposed.
+- Narration uses `AVSpeechSynthesizer`; range callbacks, not timers, drive the
+  cursor.
+- Design-repair pass: restored the hidden Present overlay, removed the desktop
+  navigation scrim, separated sidebar classes from the document title, stopped
+  OCR job totals from overwriting word counts, centered Original/Split on the
+  current highlight, and fixed the bundled sample path.
+- Presentation-format pass: line boxes are ordered with recursive XY cuts so
+  two-column pages read down one column before the next. Auto OCR now handles
+  light-on-dark slides, keeps short printed labels, and uses macOS Vision for
+  printed slide decks. Lines carry `block`, `kind`, and `sep` metadata so the UI
+  renders headings, bullets, wrapped paragraphs, tags, and label/value rows.
+  Cache version is 4; version 2 caches upgrade in place, version 3 (and older
+  mapped pages) reprocess once — their LFM3 lines sat on one visual line's box,
+  so words highlighted slivers ("ails,") instead of whole words.
+- `map_lines` splits a merged OCR line across the stacked, unmatched Vision
+  boxes it spans (word-level sequence alignment), so the reader text, the page
+  overlay boxes and the highlights agree again on wrapped paragraphs.
+- Reader visibility pass: dark-mode highlight now sets dark ink inside the
+  amber wash, and Settings gains a reading-font picker (New York / SF Pro /
+  SF Mono).
 
 ```mermaid
 flowchart LR
@@ -29,22 +78,21 @@ flowchart LR
 
 ## 1. What the user sees
 
-Two pages, served by one Python process:
+One page window, driven by one Python process:
 
-- `/` — the reader. The source page on the left, the transcript on the right.
-  The current phrase has an amber rounded box; the next phrase has a blue box.
-  Read words are dimmed; the next four words are underlined.
-- `/builder` — setup. Drop an image or PDF, run OCR, correct the text, move
-  between PDF pages, export a highlighted JPEG.
+- The app window: **Library** sidebar (source list with document rows),
+  **Text / Original / Split** panes, and a bottom **reader bar**.
+- **Read to me** uses an installed macOS voice; **Follow me** uses the live
+  microphone pipeline. Both share one cursor and saved position.
+- Each document has its own source, page images, cache, and saved position.
+- Edit Text is a native sheet; Settings opens as the app's Preferences window.
 
-There are no READ/NEXT labels or arrows anymore. The boxes are the whole
-language.
-
-The reader starts and stops the microphone with the button or Space. Clicking a
-word jumps the cursor. `[` and `]` move one phrase back or forward. If the
-reader restarts a nearby line, or skips ahead and starts a nearby line, the
-highlight snaps to it without a click. When the cursor crosses a PDF page, the
-image switches and the text pane scrolls.
+The current phrase is amber in text and gets amber boxes on the original; the
+next phrase is blue. Already-read words dim and the next four are underlined.
+Clicking a word jumps the cursor. `[` / `]` or the arrow keys move one phrase.
+Space toggles the selected mode. If the reader restarts a nearby line, or skips
+ahead and starts a nearby line, the highlight snaps to it. When the cursor
+crosses a PDF page, Original and Split follow the page change.
 
 ---
 
@@ -77,7 +125,7 @@ readalong/
       p000.jpg|png    rendered page images
       p001.png
       ...
-    cache.json        version-2 document cache
+    cache.json        version-3 document cache
     asr.log           speech server log
 ```
 
@@ -124,8 +172,11 @@ Everything downstream works on one JSON model. It is built by
 - **width / height** — pixel dimensions of the rendered page image. The UI uses
   these as the SVG viewBox and multiplies normalized boxes by them.
 - **image** — filename under `data/pages/`.
-- **lines** — visual lines in reading order, across all pages. `line` on a word
-  is an index into this global array.
+- **lines** — visual lines in layout-aware reading order, across all pages.
+  `line` on a word is an index into this global array. Each line also carries
+  presentation metadata: `block` (a readable paragraph/title/list group),
+  `kind` (`title | label | bullet | row | body`), and `sep` (how it joins the
+  previous line in the same block).
 - **tokens** — every whitespace-separated display token on the line. A token
   with `norm == ""` (an arrow, a lone bullet, punctuation) is display-only and
   has `w == -1`.
@@ -198,7 +249,7 @@ words and use `PDFPage.selection(for: NSRange)` or
 `run_ocr(path)`. `pdf_pages` renders every page, collects the pages whose text
 layer has fewer than 10 words, then calls `run_ocr_many(jobs)`. That loads
 LFM3-VL **once** for the whole document instead of once per page; the OCR thread
-reports `(done, total)` through `App.start_ocr`, which the builder and reader
+reports `(done, total)` through `App.start_ocr`, which the import card and reader
 show as "Reading page 3 of 20…". A single page still goes through `run_ocr`.
 
 `run_ocr_many` has two independent halves per page:
@@ -208,12 +259,14 @@ show as "Reading page 3 of 20…". A single page still goes through `run_ocr`.
 `ocr_lfm3(path)` loads `LiquidAI/LFM3-VL-2B-MLX-4bit` through `mlx-vlm`
 (0.7.11 or newer, per the model card) and asks:
 
-> Transcribe every line of handwritten text in this image exactly as written, in
-> reading order, one line of output per line of handwriting. Preserve the
-> original spelling, punctuation, arrows, capitalization and line breaks. Faint
-> text showing through from the back of the page is not part of this page:
-> ignore it. Do not guess: write [illegible] for a word you cannot read. Output
-> only the transcription, with no commentary and no markdown.
+> Transcribe the text exactly as written, in natural visual reading order. If
+> the page has columns, panels, sidebars, tables, or diagram labels, finish one
+> column or panel from top to bottom before moving to the next; never read
+> across a vertical gutter or join text from two columns onto one line. Read a
+> full-width heading before the columns beneath it. Preserve each visual line as
+> its own output line. Preserve spelling, punctuation, arrows, capitalization,
+> and meaningful line breaks. Ignore faint show-through. Do not guess: write
+> [illegible] for unreadable words. Output only the transcription.
 
 Sampling: `temperature=0.1`, `top_p=1.0`, `top_k=50`, `min_p=0.0`,
 `repetition_penalty=1.1`, `max_tokens=2048`, **thinking off**. Thinking produced
@@ -223,11 +276,11 @@ The model is deleted and the MLX cache cleared immediately after the call, so it
 does not compete with the speech server.
 
 If LFM3 fails and Vision produced lines, the app falls back to Vision's text.
-If both fail, the OCR error is shown in the builder.
+If both fail, the OCR error is shown in the document's processing state.
 
 **Measured:** 1.59 GB weights, ~4.7 s load when cached, **35–46 s** for the
-handwritten sample on an M1 Pro. Accuracy was about 90% of words; the builder's
-text editor is the correction path.
+handwritten sample on an M1 Pro. Accuracy was about 90% of words; **Edit text**
+is the correction path.
 
 #### B. Line geometry — macOS Vision
 
@@ -238,12 +291,22 @@ with its text, confidence, and normalized bottom-left box.
 `usable_lines()` keeps observations that:
 
 - are not in the bottom 8% of the page (`y >= 0.08`),
-- are line-sized (`0.008 <= h <= 0.09`),
-- are wide enough (`w >= 0.12`) — this drops small diagram labels,
+- are line-sized (`0.006 <= h <= 0.14`, retaining slide headings),
+- are at least `w >= 0.03` wide (short printed labels such as “Service cost”
+  must survive),
 - have confidence `>= 0.3`,
 - contain at least two alphanumerics.
 
-It sorts them top-to-bottom.
+It converts Vision's bottom-left boxes to top-left and returns
+`reading_order(lines)`, a recursive XY-cut: a clear vertical gutter is read down
+one side then the other; if a full-width heading blocks the cut, a horizontal
+whitespace band separates it and the columns beneath are cut next. A leaf sorts
+visual rows left-to-right, keeping a label and its value together.
+
+`_looks_printed()` applies the same top-left conversion and detects ink polarity
+from the crop median, so white/pink text on a dark slide is not mistaken for a
+solid dark blob. The printed hint is still based on separate letter blobs, not
+Vision confidence, because Vision is confidently wrong on cursive.
 
 > **Known macOS issue:** the accurate Vision model occasionally fails with
 > `CRImageReaderError.e5rtError(...)`. The fast model still returns boxes but its
@@ -273,8 +336,9 @@ For any line without exact PDF boxes, `attach_word_boxes()` runs
 `segment_line()` on the grayscale page image.
 
 1. Crop the line box.
-2. Ink mask: `pixel < 140` (the paper is ~190, the ink ~60–100, bleed-through
-   ~170+).
+2. Ink mask: for light paper, `pixel < min(140, median - 20)` (the paper is
+   ~190, the ink ~60–100, bleed-through ~170+). For dark slides, the polarity
+   flips to `pixel > median + 28` so white/pink text becomes the ink.
 3. Column projection; contiguous ink columns become **blobs**. Blobs narrower
    than 2 px are dropped; then narrower than 3 px if there are more than two.
 4. Word spaces are the gaps clearly wider than the rest:
@@ -365,7 +429,7 @@ terminates the speech subprocess if the app spawned it.
 1. `app.load()` from cache, or `app.ocr_now()`.
 2. Only then `app.asr.ensure()`.
 
-The web server is already listening, so the builder and reader load immediately
+The web server is already listening, so the library shell loads immediately
 and show "Reading the page…" until the model is ready. Serializing OCR and ASR
 keeps peak memory down on a 16 GB machine and avoids loading two model stacks at
 once.
@@ -497,11 +561,12 @@ free port). No auth; loopback only.
 
 | Path | Returns |
 |---|---|
-| `/` | reader HTML |
-| `/builder` | builder HTML |
-| `/image` | page 0 image (compatibility alias) |
-| `/page/<i>` | page `i` image, PNG or JPEG |
-| `/model` | the full document model JSON |
+| `/library` | document list, active id, processing progress |
+| `/setup/status` | model download status JSON |
+| `/sample` | the bundled sample PDF for the empty-library action |
+| `/image` | active document page 0 (compatibility alias) |
+| `/page/<i>` | active document page `i`, PNG or JPEG |
+| `/model` | the active document model JSON |
 | `/state` | the live state JSON (polled by the UI) |
 | `/export?mode=read\|proof&page=N` | JPEG download |
 
@@ -509,18 +574,25 @@ free port). No auth; loopback only.
 
 | Path | Body | Effect |
 |---|---|---|
-| `/upload` | `{"name":"x.pdf","data":"data:...;base64,..."}` | save source, clear cache/pages |
-| `/ocr` | `{}` | process the source; returns the model or an error |
+| `/documents/import` | `{"name":"x.pdf","data":"data:...;base64,...","mode":"auto"}` | create a document workspace and start OCR |
+| `/documents/open` | `{"id":"..."}` | stop current playback, open and restore a document |
+| `/documents/rename` | `{"id":"...","title":"..."}` | rename a library document |
+| `/documents/delete` | `{"id":"..."}` | delete a managed workspace; refuse while OCR runs |
+| `/upload` | `{"name":"x.pdf","data":"data:..."}` | compatibility wrapper for `/documents/import` |
+| `/ocr` | `{}` / `{"fast":true}` / `{"auto":true}` | process the active document |
+| `/setup/download` | `{"model":"speech"\|"ocr"}` | start a background model download |
+| `/setup/finish` | `{}` | mark onboarding done |
 | `/script` | `{"page":0,"text":"line\nline"}` | replace one page's text, rebuild, reset aligner |
 | `/start` | `{}` | start the mic and WebSocket |
 | `/stop` | `{}` | stop the mic and stream |
-| `/jump` | `{"word":123}` | set `pos` directly |
+| `/jump` | `{"word":123}` | set `pos` directly and persist it |
 | `/simulate` | `{"text":"...","final":true}` | feed a transcript without a mic (testing) |
 
 ### State JSON
 
 ```json
 {
+  "doc_id": "f5c310d766f74f17b582490550d80a53",
   "status": "idle | loading | listening | error",
   "error": "",
   "partial": "the last ASR hypothesis",
@@ -549,52 +621,47 @@ free port). No auth; loopback only.
 
 ### 8.1 Reader
 
-Layout:
+The UI is the native SwiftUI shell in `macapp/`:
 
 ```
-header: Start/Stop  status  mic meter  confidence  partial  Builder
-left:   page image + SVG overlay
-right:  full transcript, one <div> per line, one <span> per token
+NavigationSplitView
+  sidebar: source-list library, import, per-document actions
+  toolbar: Text / Original / Split, Present, Edit, Import, Settings
+  detail:  reading text (NSTextView), page image with box overlay, split
+  bottom:  Read to me / Follow me, transport, voice/speed, progress
 ```
 
-- On boot, poll `/model` until `lines.length > 0`, then render every token as a
-  `<span>` with `data-w` (word index, or `-1`). Clicking a span with `w >= 0`
-  POSTs `/jump`.
-- Poll `/state` every 120 ms. This is deliberately simple: no SSE, no WebSocket
-  to the browser, no framework.
-- For each span: `read` if `w < pos`; `look` if `pos <= w < pos + 4`; `cur` if
-  inside `current`; `nxt` if inside `next`.
-- CSS: `.cur` amber background, `.nxt` blue background, `.read` opacity 0.34,
-  `.look` blue underline.
-- The SVG overlay uses `viewBox="0 0 pageWidth pageHeight"`. `draw()` converts
-  each normalized box to user units, adds 0.4% padding, and creates a rounded
-  `<rect>` in the `curg` or `nextg` group.
-- If `state.page` changes, set the image `src` to `/page/<page>` and the SVG
-  `viewBox` to that page's dimensions. This is the automatic page turn.
-- If the current group's start word changes, `scrollIntoView({block:'center'})`
-  scrolls the text pane to the current phrase. That is the automatic document
-  scroll. The page image always fits the viewport, so it does not need its own
-  scrollbar.
-- Keyboard: Space toggles start/stop; `[`/`]` jump one group back/forward.
-- Page dividers (`Page 2`) appear in the text pane when there is more than one
-  page.
+- On boot, fetch `/library`, then `/model` for the active document. The
+  attributed string keeps every token as a span that records its global word
+  index; clicking a span POSTs `/jump`.
+- Poll `/state`; no framework, SSE, or browser WebSocket is used. The poll
+  interval adapts while speaking/listening and idles when the app is inactive.
+- Temporary `NSLayoutManager` attributes paint the current phrase (amber) and
+  next phrase (accent tint); guide mode dims everything else.
+- The SVG overlay is the same geometry, drawn with SwiftUI `Canvas` using the
+  normalized coordinates the server's `group_boxes` returns.
+- Manual page buttons update `/jump` to the first word on that page. Original
+  and Split center the current box rather than the whole tall page.
+- Read to me sends sentence chunks to `AVSpeechSynthesizer` and maps native
+  UTF-16 range callbacks back to global word indices. There is no Web Speech
+  fallback; the app is macOS-only. No timer advances the cursor.
+- Keyboard: Space toggles the selected mode; `[`/`]` or arrows move one group;
+  `⇧⌘F` presents; `⌘O` imports; `⌘1/2/3` switch panes; `⇧⌘E` exports the page.
 
-### 8.2 Builder
+### 8.2 Import and edit
 
-- Drop zone / file input accepts images and PDFs. The browser reads the file as
-  a data URL; the server decodes it and detects PDF by name, `%PDF-` magic, or
-  MIME prefix.
-- After upload, `Run OCR` calls `/ocr`. A text PDF is instant; an image or
-  scanned PDF may take a while.
-- The proof overlay draws every word box on the selected page with a thin amber
-  stroke.
-- Page nav (`‹ Page 1 / 4 ›`) changes the selected page. The textarea shows only
-  that page's lines.
-- `Save text` posts `{page, text}`. The server keeps the old line boxes by index,
-  re-tokenizes, re-segments words, rebuilds the model, resets the aligner to 0,
-  and writes the cache.
-- `Export JPEG` downloads `/export?mode=proof&page=N`.
-- `Start reading` goes to `/`.
+- The toolbar + button or a full-window drop opens `NSOpenPanel`, and the
+  selected PDF/image (up to 25 MB) is base64-posted to `/documents/import`. The
+  server creates an isolated workspace, detects PDFs by magic bytes, validates
+  images, and starts OCR.
+- OCR mode: Auto, Handwriting, or Printed, chosen in Settings. Progress is per
+  document; another ready document remains readable while a new one is
+  processed.
+- Edit text shows one page at a time in a sheet. Save posts `{page,text}`; the
+  server re-tokenizes, re-segments words, rebuilds the model, and writes the
+  cache.
+- Export JPEG via `NSSavePanel` fetches `/export?mode=proof&page=N`.
+- `⌘E` opens the Edit sheet.
 
 ### 8.3 Export
 
@@ -610,13 +677,25 @@ right:  full transcript, one <div> per line, one <span> per token
 
 ---
 
-## 9. Cache and persistence
+## 9. Library, cache, and persistence
 
-`data/cache.json`:
+`DATA/library.json` stores an ordered list of documents, the active id, titles,
+file names, status, page/word counts, last-opened time, and saved word position.
+Writes are atomic (temporary file then replace).
+
+Each document lives in `DATA/documents/<id>/`:
+
+```text
+source.pdf | source.jpg
+cache.json
+pages/p000.png | p000.jpg
+```
+
+`cache.json` keeps the version-3 page model:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "mtime": 1760000000.0,
   "size": 63123,
   "pages": [
@@ -627,13 +706,17 @@ right:  full transcript, one <div> per line, one <span> per token
 ```
 
 - The cache is valid when the source's mtime and size match and every page image
-  exists.
-- Version 1 (single image, `lines` + `width`/`height`) is migrated on load by
-  copying `current.jpg` to `pages/p000.jpg`.
+  exists. Version-2 caches whose lines all have boxes are upgraded in place;
+  caches with unboxed OCR lines are reprocessed once under the layout-aware
+  pipeline.
+- The legacy single-document `current.pdf`/`current.jpg`, `cache.json`, and
+  `pages/` are copied into the first library document on first launch. The
+  legacy files are preserved.
 - `set_script` writes the cache after editing.
-- `upload` deletes the cache and clears `pages/`.
+- Import creates a new workspace; it never clears another document's cache.
 - Page images are always regenerated by `process_source`; they are not trusted
   independently.
+- An interrupted `processing` document becomes a retryable error on restart.
 
 ---
 
@@ -653,6 +736,9 @@ Measured on the M1 Pro / 16 GB used for the POC:
 | ASR final after silence | ~0.7 s |
 | UI poll | 120 ms |
 | Highlight lag behind speech | ~0.5–1 s |
+| Aligner update, per partial | 0.2–0.4 ms (was 19–26 ms) |
+| Image OCR input | capped at 2000 px long edge |
+| App bundle / DMG | ~755 MB / ~400 MB |
 
 Model sizes: LFM3-VL 4-bit **1.59 GB**, Phonon-2.5 English **158 MB**. Peak
 memory is lower because OCR and ASR are serialized at startup and the OCR model
@@ -674,7 +760,7 @@ is freed immediately.
 | Port 8010 taken | tries 8011–8019, then a free port |
 | Port 8765 taken | tries 8766–8775 |
 | Cache stale / page missing | re-process the source |
-| OCR model download slow | builder shows "Reading the file…"; first run only |
+| OCR model download slow | import card shows page progress; first run only |
 | App killed | SIGTERM handler stops the server and the speech subprocess |
 
 ---
@@ -824,14 +910,14 @@ internal or personal app; Option B is the long-term distribution path.
 
 | Section | Functions |
 |---|---|
-| text model | `norm_token`, `norm_text`, `tokenize`, `build_pages_model`, `build_model`, `group_at`, `group_boxes` |
+| text model | `norm_token`, `norm_text`, `tokenize`, `build_pages_model`, `build_model`, `group_at`, `group_boxes`, `reading_order`, `annotate_blocks` |
 | alignment | `Aligner._score`, `Aligner._anchor`, `Aligner.update` |
 | OCR / boxes | `vision_lines`, `usable_lines`, `map_lines`, `clean_ocr`, `ocr_lfm3`, `ocr_lfm3_many`, `run_ocr`, `run_ocr_many`, `_char_width`, `segment_line`, `_boxes`, `_text_band`, `attach_word_boxes` |
 | documents | `clear_pages`, `pdf_lines`, `pdf_pages`, `image_pages`, `process_source`, `save_cache`, `load_cache` |
 | speech | `ASR` (`ensure`, `start`, `_open_mic`, `_run`, `_session`, `_send`, `stop`, `shutdown`), `tail` |
 | app | `App` (`load`, `_begin_ocr`, `ocr_now`, `start_ocr`, `_run_ocr`, `state`, `start`, `_start_bg`, `stop`, `jump`, `set_script`, `upload`, `shutdown`) |
 | export | `export_image` |
-| web | `Handler` (`do_GET`, `_serve_page`, `do_POST`), `READER_HTML`, `BUILDER_HTML` |
+| web | `Handler` (`do_GET`, `_serve_page`, `do_POST`) |
 | startup | `main`, `_sigterm`, `_startup`, `_ensure_asr` |
 
 `test_align.py` covers normalization, exact/substitution/skip/repeat alignment,
@@ -868,30 +954,50 @@ and page metadata.
 - No zip export of all PDF pages; export is one page at a time.
 - No embedding-based semantic re-anchoring; the fuzzy DP + anchor is enough for
   reading aloud.
-- No native rewrite; the reader/builder are still HTML. The `.app` is a native
-  WKWebView shell around the same Python process, so the UI code is shared
-  between `python readalong.py` and the installed app.
+
+---
+
+## macOS app UI (new)
+
+The shell is native SwiftUI (`macapp/`):
+
+- `NavigationSplitView` with a source-list sidebar; documents carry row badges
+  for page count, OCR progress and errors. Click to open, rename/delete from a
+  context menu; drag-drop anywhere imports a file.
+- The reading text is one read-only `NSTextView` with temporary attributes:
+  amber current phrase, accent-tint next phrase, gray past/look guide. Word
+  spans know their index, so clicks jump and position metrics refer to real
+  AppKit text geometry rather than span offsets.
+- Pages draw as NSImage + `Canvas` overlay in the same normalized coordinates
+  used by the aligner. `ScrollViewReader` anchors on the phrase's first line.
+- `Settings` is the app's Preferences window (System/Light/Dark, text size,
+  guide, feedback, OCR mode, model download rows).
+- Read-to-me narration is `AVSpeechSynthesizer`; the sentence chunker and the
+  UTF-16 offset-to-word map are 1:1 ports of the older web JS logic.
+- Follow-me posts `/start` and streams `state.rms` / `state.partial` /
+  `state.confidence` into the bottom bar.
 
 ---
 
 ## 16. The installed app
 
-`macapp/main.swift` owns the window, the menu bar, microphone permission and the
-backend process. On launch it:
+`macapp/ReadAlongApp.swift` owns the window, the menu bar, microphone permission
+and `BackendService.swift` owns the backend process. On launch it:
 
 1. Reserves a free loopback port.
 2. Runs the bundled interpreter:
-   `Resources/backend/python/bin/python3.12 -u readalong.py --no-browser --port N`
+   `Resources/backend/python/bin/python3.12 -u readalong.py --port N`
    with `PYTHONPATH=Resources/backend/site-packages`,
    `READALONG_DATA=~/Library/Application Support/ReadAlong` and
    `READALONG_FERMION=Resources/backend/fermion_main.py`.
-3. Polls `GET /state` until the server answers, then loads `/` in a WKWebView.
+3. Polls `GET /state` until the server answers, then the SwiftUI `Window`
+   scene takes over and the model fetches `/library` and `/model`.
 4. On quit, sends `SIGTERM` to the backend; `readalong.py`'s handler shuts the
    speech server down.
 
 The `fermion` console script is replaced by `fermion_main.py`, because the
 bundle has no `bin/fermion`. The mic is primed with `AVCaptureDevice` so TCC
-attributes access to ReadAlong rather than the child Python process.
+attributes access to Read Along rather than the child Python process.
 
 `scripts/build_app.sh` copies a uv-managed CPython 3.12 and the locked packages
 into `Contents/Resources/backend`, compiles `main.swift` with `swiftc`, and
