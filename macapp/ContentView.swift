@@ -109,6 +109,9 @@ struct DetailView: View {
     @State private var showDetails = false
     @State private var confirmRecovery = false
     @State private var lastFocusedPane: ViewPane = .text
+    // Owns the PDF toolbar docked above the split view so it and the PDF pane
+    // track the same document.
+    @StateObject private var splitController = PDFSourceController()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -158,6 +161,12 @@ struct DetailView: View {
     }
 
     private var hasWords: Bool { !model.pageModel.words.isEmpty }
+    private var isPDFSource: Bool {
+        guard let data = model.sourceData, !data.isEmpty else { return false }
+        return data.prefix(4) == Data("%PDF".utf8)
+    }
+    /// More than one page worth of text exists to browse.
+    private var hasPageNav: Bool { model.pageModel.pages.count > 1 }
     private var hasDocument: Bool {
         model.activeDoc != nil || model.hasSource || model.documentLoadingMessage != nil
     }
@@ -228,35 +237,52 @@ struct DetailView: View {
                 }
                 switch pane {
                 case .text:
-                    textPane
-                        .frame(maxWidth: ReaderTheme.readingWidth + 88)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, width < 700 ? 16 : ReaderTheme.gutter)
-                        .padding(.top, 16)
-                        .padding(.bottom, 8)
+                    VStack(spacing: 0) {
+                        if hasPageNav { TextPageNavToolbar() }
+                        textPane
+                    }
+                    .frame(maxWidth: ReaderTheme.readingWidth + 88)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, width < 700 ? 16 : ReaderTheme.gutter)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
                 case .original:
                     PageView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .split:
-                    HSplitView {
-                        textPane
-                            .frame(minWidth: 280, idealWidth: width * 0.45, maxWidth: .infinity,
-                                   maxHeight: .infinity)
-                            .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
-                            .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .text })
-                        PageView()
-                            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-                            .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .original })
+                    VStack(spacing: 0) {
+                        if isPDFSource { SourceViewerToolbar(controller: splitController) }
+                        HSplitView {
+                            textPane(showsPageNav: hasPageNav)
+                                .frame(minWidth: 280, idealWidth: width * 0.45, maxWidth: .infinity,
+                                       maxHeight: .infinity)
+                                .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
+                                .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .text })
+                            PageView(sharedController: splitController, showsToolbar: false)
+                                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                                .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .original })
+                        }
                     }
-                    .padding(.leading, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
     }
 
-    private var textPane: some View {
+    private var textPane: some View { textPane(showsPageNav: false) }
+
+    private func textPane(showsPageNav: Bool) -> some View {
+        VStack(spacing: 0) {
+            if showsPageNav {
+                TextPageNavToolbar()
+                    .padding(.bottom, 6)
+            }
+            cardPane
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var cardPane: some View {
         VStack(spacing: 0) {
             if hasWords {
                 if !model.viewer.textFollows {
@@ -739,6 +765,50 @@ private enum ReaderShellLayout {
         assert(effectivePane(.text, width: 500, lastPane: .original) == .text)
     }
     #endif
+}
+
+/// Page controls for the text pane: same pill styling as the PDF toolbar, but
+/// navigation only — there is nothing to zoom in text.
+struct TextPageNavToolbar: View {
+    @EnvironmentObject private var model: ReaderModel
+    @State private var pageInput: String = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Menu("Pages") {
+                ForEach(1...max(1, model.pageModel.pages.count), id: \.self) { page in
+                    Button("Page \(page)") { model.setPage(page - 1) }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            Button { model.setPage(model.displayPage - 1) } label: { Image(systemName: "chevron.left") }
+                .buttonStyle(.bordered)
+                .disabled(model.displayPage <= 0)
+                .accessibilityLabel("Previous")
+            TextField("", text: $pageInput)
+                .frame(width: 44)
+                .onAppear { pageInput = "\(model.displayPage + 1)" }
+                .onChange(of: model.displayPage) { _, v in pageInput = "\(v + 1)" }
+                .onSubmit {
+                    if let n = Int(pageInput), (1...max(1, model.pageModel.pages.count)).contains(n) {
+                        model.setPage(n - 1)
+                    } else {
+                        pageInput = "\(model.displayPage + 1)"
+                    }
+                }
+                .onExitCommand { pageInput = "\(model.displayPage + 1)" }
+            Text("/ \(model.pageModel.pages.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button { model.setPage(model.displayPage + 1) } label: { Image(systemName: "chevron.right") }
+                .buttonStyle(.bordered)
+                .disabled(model.displayPage >= model.pageModel.pages.count - 1)
+                .accessibilityLabel("Next")
+        }
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+    }
 }
 
 /// Let the native splitter save its divider; do not turn browsing into model state.

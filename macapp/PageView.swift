@@ -4,7 +4,12 @@ import SwiftUI
 struct PageView: View {
     @EnvironmentObject private var model: ReaderModel
     @StateObject private var sourceController = PDFSourceController()
+    /// In Split the toolbar is docked above both panes, so the PDF pane shares
+    /// the controller owned by ContentView instead of the toolbar row below.
+    var sharedController: PDFSourceController?
+    var showsToolbar = true
 
+    private var controller: PDFSourceController { sharedController ?? sourceController }
     private var isPDF: Bool {
         guard let data = model.sourceData, !data.isEmpty else { return false }
         return data.prefix(4) == Data("%PDF".utf8)
@@ -12,8 +17,8 @@ struct PageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isPDF {
-                SourceViewerToolbar(controller: sourceController)
+            if isPDF, showsToolbar {
+                SourceViewerToolbar(controller: controller)
             }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -29,16 +34,16 @@ struct PageView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.canvas)
         .onAppear {
-            sourceController.onUserNavigate = { page in
+            controller.onUserNavigate = { page in
                 model.viewer.browsedPage = max(0, page - 1)
                 model.viewer.sourceFollows = false
             }
         }
         .onChange(of: model.displayPage) { _, page in
-            if model.viewer.sourceFollows { sourceController.followToPage(page + 1) }
+            if model.viewer.sourceFollows { controller.followToPage(page + 1) }
         }
         .onChange(of: model.viewer.sourceFollows) { _, follows in
-            if follows { sourceController.followToPage(model.displayPage + 1) }
+            if follows { controller.followToPage(model.displayPage + 1) }
         }
     }
 
@@ -65,7 +70,7 @@ struct PageView: View {
             if isPDF {
                 PDFSourceRepresentable(
                     data: data,
-                    controller: sourceController,
+                    controller: controller,
                     page: model.displayPage,
                     follows: model.viewer.sourceFollows,
                     currentBoxes: currentBoxes,
