@@ -1,22 +1,31 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Window shell
+
 struct ContentView: View {
     @EnvironmentObject private var model: ReaderModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var dropTargeted = false
     @State private var dropError: String?
+    @State private var sidebarVisible = true
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 208, ideal: 256, max: 320)
-        } detail: {
-            DetailView()
+        VStack(spacing: 0) {
+            StudioHeader(sidebarVisible: $sidebarVisible)
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    SidebarView()
+                        .frame(width: 266)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Rectangle().fill(ReaderTheme.hairline).frame(width: 1)
+                }
+                DetailView()
+            }
         }
-        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 1000, minHeight: 620)
         .background(ReaderTheme.canvas)
-        .frame(minWidth: 900, minHeight: 600)
         .preferredColorScheme(scheme)
         .task { await model.start() }
         .onChange(of: scenePhase) { _, phase in
@@ -27,6 +36,7 @@ struct ContentView: View {
             ReaderTheme.validateContrast()
             #endif
         }
+        .animation(.easeInOut(duration: 0.18), value: sidebarVisible)
         .sheet(isPresented: $model.showEdit) {
             EditSheet()
                 .environmentObject(model)
@@ -49,10 +59,10 @@ struct ContentView: View {
         }
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8, 5]))
-                    .padding(8)
-                    .background(Color.accentColor.opacity(0.06))
+                RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
+                    .strokeBorder(ReaderTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .padding(10)
+                    .background(ReaderTheme.accent.opacity(0.06))
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -100,17 +110,261 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Title bar
+
+private struct StudioHeader: View {
+    @EnvironmentObject private var model: ReaderModel
+    @Binding var sidebarVisible: Bool
+    @State private var showAppearance = false
+    @State private var showDetails = false
+
+    private var hasDocument: Bool {
+        model.activeDoc != nil || model.hasSource || model.documentLoadingMessage != nil
+    }
+    private var hasWords: Bool { !model.pageModel.words.isEmpty }
+    private var title: String { model.activeDoc?.title ?? "Read Along" }
+
+    private var subtitle: String {
+        if model.documentLoadingMessage != nil { return "Opening document…" }
+        guard hasDocument else { return "Your library, on this Mac" }
+        let pages = max(model.sourcePageCount, model.activeDoc?.pageCount ?? 0)
+        var parts: [String] = []
+        if pages > 0 { parts.append("\(pages) \(pages == 1 ? "page" : "pages")") }
+        if model.isProcessing { parts.append("Recovering text") }
+        else if model.isComplete { parts.append("Finished") }
+        else if hasWords { parts.append("\(Int(model.progressPercent))% read") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    private var mode: Binding<ViewPane> {
+        Binding(
+            get: { model.expandedPane ?? .split },
+            set: { model.expandedPane = $0 == .split ? nil : $0 }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(StudioIconButtonStyle())
+            .help(sidebarVisible ? "Hide library" : "Show library")
+            .accessibilityLabel(sidebarVisible ? "Hide library" : "Show library")
+
+            HStack(spacing: 8) {
+                Image(systemName: "text.book.closed.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ReaderTheme.accent)
+                    .accessibilityHidden(true)
+                Text("Read Along")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ReaderTheme.primaryText)
+            }
+            .fixedSize()
+
+            if hasDocument {
+                Rectangle()
+                    .fill(ReaderTheme.hairlineStrong)
+                    .frame(width: 1, height: 18)
+                    .padding(.horizontal, 2)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ReaderTheme.primaryText)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                        .lineLimit(1)
+                        .monospacedDigit()
+                }
+                .frame(maxWidth: 320, alignment: .leading)
+                .help(title)
+            }
+
+            Spacer(minLength: 8)
+
+            if hasDocument {
+                ViewModeControl(mode: mode, textEnabled: hasWords, splitEnabled: hasWords)
+                Rectangle()
+                    .fill(ReaderTheme.hairlineStrong)
+                    .frame(width: 1, height: 18)
+
+                HeaderIconButton(symbol: "magnifyingglass", help: "Find in document (⌘F)") {
+                    model.findInDocument()
+                }
+                .disabled(!hasWords || model.presentVisible)
+
+                Button {
+                    showAppearance.toggle()
+                } label: {
+                    Text("Aa")
+                        .font(.system(size: 12.5, weight: .medium, design: .serif))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(StudioIconButtonStyle())
+                .accessibilityLabel("Reading appearance")
+                .help("Reading appearance")
+                .popover(isPresented: $showAppearance, arrowEdge: .bottom) {
+                    ReadingAppearancePopover().environmentObject(model)
+                }
+
+                HeaderIconButton(symbol: "arrow.up.left.and.arrow.down.right",
+                                 help: "Focus (⇧⌘F)") {
+                    model.enterPresent()
+                }
+                .disabled(!hasWords || model.presentVisible)
+            }
+
+            moreMenu
+        }
+        .padding(.leading, 84)
+        .padding(.trailing, 14)
+        .frame(height: 54)
+        .background {
+            ZStack {
+                ReaderTheme.canvas
+                WindowDragArea()
+            }
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button { model.importDocument() } label: {
+                Label("Import document…", systemImage: "plus")
+            }
+            .disabled(!model.ready)
+            if hasDocument {
+                Divider()
+                Button { model.showEdit = true } label: {
+                    Label("Edit text…", systemImage: "pencil")
+                }
+                .disabled(!hasWords)
+                Button { model.exportPage(mode: "proof") } label: {
+                    Label("Export word-box proof…", systemImage: "square.and.arrow.up")
+                }
+                Button { model.exportPage(mode: "read") } label: {
+                    Label("Export current highlight…", systemImage: "highlighter")
+                }
+                .disabled(model.pageModel.pages.isEmpty)
+                Divider()
+                Button { model.pendingRename = model.activeDoc } label: {
+                    Label("Rename…", systemImage: "character.cursor.ibeam")
+                }
+                .disabled(model.activeDoc == nil)
+                Button { showDetails = true } label: {
+                    Label("Document details…", systemImage: "info.circle")
+                }
+            }
+            Divider()
+            SettingsLink { Label("Settings…", systemImage: "gearshape") }
+        } label: {
+            Image(systemName: "ellipsis")
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 26)
+        .help("More actions")
+        .accessibilityLabel("More actions")
+        .sheet(isPresented: $showDetails) {
+            DocumentDetailsView().environmentObject(model)
+        }
+    }
+}
+
+/// A compact three-way view switch instead of scattered expand arrows.
+private struct ViewModeControl: View {
+    @Binding var mode: ViewPane
+    var textEnabled: Bool
+    var splitEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: 1) {
+            segment(.text, symbol: "text.alignleft", help: "Text only (⌘1)", enabled: textEnabled)
+            segment(.original, symbol: "doc.richtext", help: "Original only (⌘2)", enabled: true)
+            segment(.split, symbol: "rectangle.split.2x1", help: "Split view (⌘3)", enabled: splitEnabled)
+        }
+        .padding(2)
+        .background(ReaderTheme.raised,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+        }
+    }
+
+    private func segment(_ pane: ViewPane, symbol: String, help: String, enabled: Bool) -> some View {
+        let selected = _mode.wrappedValue == pane
+        return Button {
+            _mode.wrappedValue = pane
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(selected ? ReaderTheme.primaryText : ReaderTheme.secondaryText)
+                .frame(width: 28, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(selected ? ReaderTheme.selection : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+private struct HeaderIconButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(StudioIconButtonStyle())
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Empty areas of the custom title bar move the window; buttons above it still win.
+private struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) {}
+
+    final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                window?.zoom(nil)
+            } else {
+                window?.performDrag(with: event)
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { self }
+    }
+}
+
+// MARK: - Reader
+
 struct DetailView: View {
     @EnvironmentObject private var model: ReaderModel
     @ObservedObject private var backend = BackendService.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showAppearance = false
-    @State private var showDetails = false
     @State private var confirmRecovery = false
-    /// Which pane is expanded to fill the workspace; `nil` = split view.
-    @State private var expandedPane: ViewPane? = nil
-    // Owns the PDF toolbar docked above the split view so it and the PDF pane
-    // track the same document.
     @StateObject private var splitController = PDFSourceController()
 
     var body: some View {
@@ -118,10 +372,6 @@ struct DetailView: View {
             notices
             GeometryReader { geometry in
                 workspace(width: geometry.size.width)
-                    // NSViewRepresentable (NSScrollView) children don't always
-                    // participate in SwiftUI safe-area layout, so clamp the
-                    // workspace height explicitly to keep scrollable panes clear
-                    // of the bottom player bar.
                     .frame(maxHeight: geometry.size.height - bottomInsetHeight)
             }
         }
@@ -131,12 +381,7 @@ struct DetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if model.canRead, model.documentLoadingMessage == nil {
                 PlayerBar()
-                    .frame(maxWidth: 1000)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 16)
                     .frame(maxWidth: .infinity)
-                    .background(ReaderTheme.canvas)
             }
         }
         .overlay {
@@ -145,14 +390,6 @@ struct DetailView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.presentVisible)
-        .navigationTitle(title)
-        .navigationSubtitle(subtitle)
-        .toolbarBackground(ReaderTheme.canvas, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
-        .toolbar(content: toolbar)
-        .sheet(isPresented: $showDetails) {
-            DocumentDetailsView().environmentObject(model)
-        }
         .confirmationDialog("Recover this document’s text again?", isPresented: $confirmRecovery,
                             titleVisibility: .visible) {
             Button("Recover document text", role: .destructive) { model.reOCR() }
@@ -170,53 +407,45 @@ struct DetailView: View {
     private var hasDocument: Bool {
         model.activeDoc != nil || model.hasSource || model.documentLoadingMessage != nil
     }
-    /// Height to subtract from the workspace so scrollable panes never extend
-    /// underneath the bottom player bar.
     private var bottomInsetHeight: CGFloat {
         model.canRead && model.documentLoadingMessage == nil ? PlayerBar.measuredHeight : 0
     }
-    private var title: String { model.activeDoc?.title ?? "Read Along" }
-
-    private var subtitle: String {
-        if model.documentLoadingMessage != nil { return "Opening document…" }
-        guard hasDocument else { return "A little space to read." }
-        let pages = max(model.sourcePageCount, model.activeDoc?.pageCount ?? 0)
-        var parts: [String] = []
-        if pages > 0 { parts.append("\(pages) \(pages == 1 ? "page" : "pages")") }
-        if model.isProcessing { parts.append("Recovering text") }
-        else if model.isComplete { parts.append("Completed") }
-        else if hasWords { parts.append("\(Int(model.progressPercent))% read") }
-        return parts.joined(separator: " · ")
-    }
 
     @ViewBuilder private var notices: some View {
-        if hasDocument, let error = backend.startupError {
-            ReaderStatusStrip(symbol: "bolt.slash", title: "Reading engine disconnected", detail: error) {
-                Button("Reconnect") { backend.restart() }
+        VStack(spacing: 8) {
+            if hasDocument, let error = backend.startupError {
+                ReaderStatusStrip(symbol: "bolt.slash", title: "Reading engine disconnected", detail: error) {
+                    Button("Reconnect") { backend.restart() }
+                        .buttonStyle(StudioSecondaryButtonStyle())
+                }
+            } else if hasDocument, !model.ready {
+                ReaderStatusStrip(symbol: "clock", title: "Preparing the reading engine…",
+                                  detail: "Your saved document stays here while the engine reconnects.", busy: true) {
+                    EmptyView()
+                }
             }
-        } else if hasDocument, !model.ready {
-            ReaderStatusStrip(symbol: "", title: "Preparing the reading engine…",
-                              detail: "Your saved document stays here while the engine reconnects.", busy: true) {
-                EmptyView()
+            if let error = model.operationError {
+                ReaderStatusStrip(symbol: "exclamationmark.circle", title: "Couldn’t complete that action", detail: error) {
+                    Button("Dismiss") { model.dismissOperationError() }
+                        .buttonStyle(StudioSecondaryButtonStyle())
+                }
+            } else {
+                ToastView()
+            }
+            if model.isProcessing, model.documentLoadingMessage == nil {
+                ReaderStatusStrip(symbol: "clock", title: "Recovering document text", detail: model.processingCopy, busy: true) {
+                    EmptyView()
+                }
+            } else if hasWords, recoveryError != nil {
+                ReaderStatusStrip(symbol: "exclamationmark.triangle", title: "Some text couldn’t be recovered",
+                                  detail: recoveryError ?? "Available pages are still readable.") {
+                    Button("Retry recovery…") { confirmRecovery = true }
+                        .buttonStyle(StudioSecondaryButtonStyle())
+                }
             }
         }
-        if let error = model.operationError {
-            ReaderStatusStrip(symbol: "exclamationmark.circle", title: "Couldn’t complete that action", detail: error) {
-                Button("Dismiss") { model.dismissOperationError() }
-            }
-        } else {
-            ToastView()
-        }
-        if model.isProcessing, model.documentLoadingMessage == nil {
-            ReaderStatusStrip(symbol: "", title: "Recovering document text", detail: model.processingCopy, busy: true) {
-                EmptyView()
-            }
-        } else if hasWords, recoveryError != nil {
-            ReaderStatusStrip(symbol: "exclamationmark.triangle", title: "Some text couldn’t be recovered",
-                              detail: recoveryError ?? "Available pages are still readable.") {
-                Button("Retry recovery…") { confirmRecovery = true }
-            }
-        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     private var recoveryError: String? {
@@ -233,47 +462,30 @@ struct DetailView: View {
         } else if !hasDocument {
             PlaceholderView()
         } else {
-            // The PDF on the right is the source of truth: it owns the
-            // page toolbar and the page position, and the text panel on
-            // the left only mirrors whatever page the PDF is showing.
+            // The PDF on the right owns the page; the text panel mirrors it.
             HSplitView {
-                if expandedPane != .original {
+                if model.expandedPane != .original {
                     textPane
-                        .frame(minWidth: 220, idealWidth: min(340, max(270, width * 0.30)), maxWidth: 380,
+                        .frame(minWidth: 300,
+                               idealWidth: min(380, max(320, width * 0.34)),
+                               maxWidth: model.expandedPane == .text ? .infinity : 460,
                                maxHeight: .infinity)
                         .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
-                        .simultaneousGesture(
-                            TapGesture().onEnded { if expandedPane == .text { expandedPane = nil } }
-                        )
-                        .overlay(alignment: .topTrailing) {
-                            expandButton(for: .text)
-                        }
                 }
-                if expandedPane != .text {
+                if model.expandedPane != .text {
                     VStack(spacing: 0) {
-                        if isPDFSource { SourceViewerToolbar(controller: splitController) }
-                        PageView(sharedController: splitController, showsToolbar: false)
+                        PageView(sharedController: splitController)
                     }
-                    .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-                    .background(ReaderTheme.canvas)
-                    .simultaneousGesture(
-                        TapGesture().onEnded { if expandedPane == .original { expandedPane = nil } }
-                    )
-                    .overlay(alignment: .topLeading) {
-                        expandButton(for: .original)
-                    }
+                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .padding(12)
             .onChange(of: splitController.currentPage) { _, newPage in
                 if isPDFSource { syncPDFPage(newPage) }
             }
         }
     }
 
-    /// The text panel mirrors the PDF's page, whatever moved it there:
-    /// toolbar, arrow keys, a scroll that turns the PDF page, or speech
-    /// following. Programmatic follows are ignored so browsing never
-    /// detaches the live reader.
     private func syncPDFPage(_ oneBased: Int) {
         if splitController.lastProgrammaticPage == oneBased {
             splitController.lastProgrammaticPage = nil
@@ -292,179 +504,163 @@ struct DetailView: View {
         } else {
             TextUnavailableView(error: recoveryError) { confirmRecovery = true }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+                .background(ReaderTheme.surface,
+                            in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
-                        .strokeBorder(ReaderTheme.separator, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
+                        .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
                         .allowsHitTesting(false)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
-        }
-    }
-
-    /// Expand one pane to fill the workspace; tapping again returns to split view.
-    @ViewBuilder private func expandButton(for pane: ViewPane) -> some View {
-        let isExpanded = expandedPane == pane
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                expandedPane = isExpanded ? nil : pane
-            }
-        } label: {
-            Image(systemName: isExpanded ? "arrow.backward" : "arrow.left.and.right")
-                .imageScale(.small)
-        }
-        .controlSize(.small)
-        .buttonStyle(.plain)
-        .padding(7)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .padding(6)
-        .help(isExpanded ? "Return to split view" : "Expand \(pane == .text ? "text" : "original")")
-    }
-
-    @ToolbarContentBuilder private func toolbar() -> some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button { model.findInDocument() } label: {
-                Label("Find", systemImage: "magnifyingglass")
-            }
-            .labelStyle(.iconOnly)
-            .controlSize(.small)
-            .buttonStyle(.borderless)
-            .disabled(!hasWords || model.presentVisible)
-            .help("Find in document (⌘F)")
-
-            Button { showAppearance.toggle() } label: {
-                Text("Aa").font(.system(size: 15, weight: .medium, design: .serif))
-            }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Reading appearance")
-            .help("Reading appearance")
-            .popover(isPresented: $showAppearance, arrowEdge: .bottom) {
-                ReadingAppearancePopover().environmentObject(model)
-            }
-
-            Button { model.enterPresent() } label: {
-                Label("Focus", systemImage: "arrow.up.left.and.arrow.down.right")
-            }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
-            .disabled(!hasWords || model.presentVisible)
-            .help("Focus (⇧⌘F)")
-
-            Menu {
-                Button { model.showEdit = true } label: {
-                    Label("Edit text…", systemImage: "pencil")
-                }
-                .disabled(!hasWords)
-                Button { model.exportPage(mode: "proof") } label: {
-                    Label("Export word-box proof…", systemImage: "square.and.arrow.up")
-                }
-                Button { model.exportPage(mode: "read") } label: {
-                    Label("Export current highlight…", systemImage: "highlighter")
-                }
-                .disabled(!hasDocument || model.pageModel.pages.isEmpty)
-                Divider()
-                Button {
-                    model.pendingRename = model.activeDoc
-                } label: {
-                    Label("Rename…", systemImage: "character.cursor.ibeam")
-                }
-                .disabled(model.activeDoc == nil)
-                Button { showDetails = true } label: {
-                    Label("Document details…", systemImage: "info.circle")
-                }
-                .disabled(!hasDocument)
-                Divider()
-                Button { model.importDocument() } label: {
-                    Label("Import document…", systemImage: "plus")
-                }
-                .disabled(!model.ready)
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
-            } label: {
-                Label("More", systemImage: "ellipsis.circle")
-            }
-            .labelStyle(.iconOnly)
-            .controlSize(.small)
-            .buttonStyle(.borderless)
-            .help("More document actions")
-            .accessibilityLabel("More document actions")
+                .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         }
     }
 }
 
-/// Welcome is useful without installing either optional recognition model.
+// MARK: - Welcome & states
+
 struct PlaceholderView: View {
     @EnvironmentObject private var model: ReaderModel
     @FocusState private var importFocused: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(spacing: 10) {
-                    Image(systemName: "book.closed")
-                        .font(.system(size: 19, weight: .medium))
-                    Text("READ ALONG")
-                        .font(.caption.weight(.semibold))
-                        .tracking(1.8)
-                }
-                .foregroundStyle(ReaderTheme.secondaryText)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Your words.\nYour pace.")
-                        .font(.system(size: 34, weight: .semibold))
-                        .tracking(-0.8)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityAddTraits(.isHeader)
-                    Text("Open a PDF or photo. Listen with a moving reading guide, or read aloud and let the guide follow you.")
-                        .font(.system(size: 15))
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                        .lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Button { model.importDocument() } label: {
-                            Label("Import a document…", systemImage: "plus")
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 28)
+                    HStack(alignment: .center, spacing: 32) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(ReaderTheme.accent)
+                                    .frame(width: 5, height: 5)
+                                Text("READ ALONG")
+                                    .font(ReaderTheme.micro(10))
+                                    .tracking(1.8)
+                                    .foregroundStyle(ReaderTheme.secondaryText)
+                            }
+                            .padding(.bottom, 18)
+
+                            Text("Your words.\nYour pace.")
+                                .font(.system(size: 46, weight: .semibold))
+                                .tracking(-1.2)
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityAddTraits(.isHeader)
+                                .padding(.bottom, 18)
+
+                            Text("Open a PDF or a photo. Listen with a moving reading guide, or read aloud and let the guide follow your voice.")
+                                .font(.system(size: 14))
+                                .foregroundStyle(ReaderTheme.secondaryText)
+                                .lineSpacing(5)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.bottom, 26)
+
+                            HStack(spacing: 10) {
+                                Button { model.importDocument() } label: {
+                                    Label("Import a document", systemImage: "plus")
+                                }
+                                .buttonStyle(StudioPrimaryButtonStyle())
+                                .focused($importFocused)
+                                .help("Choose a PDF, JPEG, or PNG (⌘O)")
+
+                                Button("Try a sample") { Task { await model.importSample() } }
+                                    .buttonStyle(StudioSecondaryButtonStyle())
+                            }
+                            .padding(.bottom, 14)
+
+                            Text("PDF, JPEG, or PNG  ·  Up to 25 MB")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ReaderTheme.tertiaryText)
+                                .padding(.bottom, 30)
+
+                            Rectangle()
+                                .fill(ReaderTheme.hairline)
+                                .frame(height: 1)
+                                .padding(.bottom, 16)
+
+                            HStack(spacing: 8) {
+                                Image(systemName: "lock.shield")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(ReaderTheme.tertiaryText)
+                                    .accessibilityHidden(true)
+                                Text("Processed on this Mac. No account required.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(ReaderTheme.tertiaryText)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                        .focused($importFocused)
-                        .help("Choose a PDF, JPEG, or PNG (⌘O)")
-                        Button("Try a sample") { Task { await model.importSample() } }
-                            .buttonStyle(.bordered)
-                            .controlSize(.regular)
+                        .frame(maxWidth: 370, alignment: .leading)
+
+                        ReadingPreviewCard()
+                            .accessibilityHidden(true)
                     }
-                    Text("PDF, JPEG, or PNG · Up to 25 MB")
-                        .font(.caption)
-                        .foregroundStyle(ReaderTheme.secondaryText)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 40)
+                    .frame(maxWidth: 860)
+                    Spacer(minLength: 28)
                 }
-                Divider().overlay(ReaderTheme.separator)
-                HStack(alignment: .top, spacing: 24) {
-                    welcomeMode("Follow me", symbol: "mic",
-                                detail: "Read aloud at your own pace. The reading guide follows your voice.")
-                }
-                Label("Processed on this Mac. No account required.", systemImage: "lock.shield")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
-            .padding(32)
-            .frame(maxWidth: 640, alignment: .leading)
-            .glassPanel(radius: ReaderTheme.cardRadius)
-            .padding(24)
-            .frame(maxWidth: .infinity, minHeight: 500)
         }
         .onAppear { importFocused = true }
     }
+}
 
-    private func welcomeMode(_ title: String, symbol: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol).font(.headline)
-            Text(detail)
-                .font(.callout)
-                .foregroundStyle(ReaderTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .lineSpacing(3)
+/// A small paper study that gives the empty state something to look at.
+private struct ReadingPreviewCard: View {
+    private let lines: [(width: CGFloat, highlight: Bool)] = [
+        (150, false), (128, false), (160, false), (108, false),
+        (142, true), (132, false), (90, false),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CHAPTER ONE")
+                    .font(.system(size: 8, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.black.opacity(0.38))
+                Text("The quiet hour")
+                    .font(.system(size: 23, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.black.opacity(0.82))
+            }
+            .padding(.bottom, 8)
+
+            VStack(alignment: .leading, spacing: 11) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { entry in
+                    let line = entry.element
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(line.highlight ? ReaderTheme.pageCurrent.opacity(0.30) : Color.black.opacity(0.10))
+                            .frame(width: line.width + 10, height: 9)
+                        Capsule()
+                            .fill(line.highlight ? ReaderTheme.pageCurrent : Color.black.opacity(0.20))
+                            .frame(width: line.width, height: 2.5)
+                            .offset(y: 3)
+                    }
+                }
+            }
+
+            Spacer(minLength: 24)
+
+            HStack {
+                Text("03")
+                    .font(ReaderTheme.numeral(9, weight: .medium))
+                Spacer()
+                Image(systemName: "bookmark")
+                    .font(.system(size: 9))
+            }
+            .foregroundStyle(Color.black.opacity(0.30))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .frame(width: 220, height: 306, alignment: .topLeading)
+        .background(Color(red: 0.975, green: 0.968, blue: 0.945),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 28, x: 0, y: 18)
+        .rotationEffect(.degrees(-2))
     }
 }
 
@@ -473,41 +669,51 @@ private struct EngineStatusView: View {
     var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Label("Read Along", systemImage: "book.closed")
-                .font(.headline)
-                .foregroundStyle(ReaderTheme.secondaryText)
-            if error == nil { ProgressView().controlSize(.small) }
-            else { Image(systemName: "bolt.slash").font(.title2).foregroundStyle(ReaderTheme.secondaryText) }
-            VStack(alignment: .leading, spacing: 8) {
-                Text(error == nil ? "Opening your library…" : "Let’s reconnect your library.")
-                    .font(.title2.weight(.semibold))
-                    .accessibilityAddTraits(.isHeader)
-                Text(error == nil
-                     ? "Preparing the reading engine on this Mac. Your documents will appear here when it’s ready."
-                     : "The local reading engine couldn’t connect. Your saved documents haven’t been removed.")
-                    .font(.callout)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(error == nil ? ReaderTheme.accent : ReaderTheme.warning)
+                    .frame(width: 5, height: 5)
+                Text("READ ALONG")
+                    .font(ReaderTheme.micro(10))
+                    .tracking(1.8)
                     .foregroundStyle(ReaderTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            if error == nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "bolt.slash")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+            }
+            Text(error == nil ? "Opening your library…" : "Let’s reconnect your library.")
+                .font(.system(size: 28, weight: .semibold))
+                .tracking(-0.4)
+                .accessibilityAddTraits(.isHeader)
+            Text(error == nil
+                 ? "Preparing the reading engine on this Mac. Your documents will appear here when it’s ready."
+                 : "The local reading engine couldn’t connect. Your saved documents haven’t been removed.")
+                .font(.system(size: 13))
+                .foregroundStyle(ReaderTheme.secondaryText)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
             if let error {
                 Button("Retry connection") { model.retryConnection() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(StudioPrimaryButtonStyle())
                 DisclosureGroup("Details") {
-                    Text(error).font(.callout).textSelection(.enabled).padding(.top, 8)
+                    Text(error).font(.system(size: 11)).textSelection(.enabled).padding(.top, 8)
                 }
-                .font(.callout)
+                .font(.system(size: 12))
             } else {
                 Text("First launch can take a little longer. No models are downloaded automatically.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
             }
         }
-        .padding(32)
-        .frame(maxWidth: 490, alignment: .leading)
+        .padding(40)
+        .frame(maxWidth: 470, alignment: .leading)
         .glassPanel(radius: ReaderTheme.cardRadius)
-        .padding(24)
+        .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -516,25 +722,30 @@ private struct DocumentLoadingView: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 24) {
-            VStack(alignment: .leading, spacing: 14) {
-                Image(systemName: "doc.text").font(.title).foregroundStyle(ReaderTheme.secondaryText)
+        VStack(spacing: 22) {
+            VStack(alignment: .leading, spacing: 13) {
+                Text("PAGE 01")
+                    .font(ReaderTheme.micro(8))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.black.opacity(0.35))
                 ForEach([1.0, 0.84, 0.93, 0.68], id: \.self) { fraction in
-                    Capsule().fill(ReaderTheme.separator.opacity(0.55))
-                        .frame(width: 216 * fraction, height: 7)
+                    Capsule().fill(Color.black.opacity(0.10))
+                        .frame(width: 216 * fraction, height: 6)
                 }
             }
-            .padding(32)
+            .padding(30)
             .frame(width: 290, height: 230, alignment: .topLeading)
-            .glassPanel(radius: 8)
+            .background(Color(red: 0.97, green: 0.965, blue: 0.945),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(color: .black.opacity(0.22), radius: 22, y: 12)
             .accessibilityHidden(true)
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text(message).font(.callout).foregroundStyle(ReaderTheme.secondaryText)
+                Text(message).font(.system(size: 12)).foregroundStyle(ReaderTheme.secondaryText)
             }
             Text("Your original file stays unchanged.")
-                .font(.caption)
-                .foregroundStyle(ReaderTheme.secondaryText)
+                .font(.system(size: 11))
+                .foregroundStyle(ReaderTheme.tertiaryText)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -548,33 +759,36 @@ private struct TextUnavailableView: View {
     let onRecover: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             if model.isProcessing { ProgressView().controlSize(.small) }
             else {
                 Image(systemName: error == nil ? "text.page" : "exclamationmark.triangle")
-                    .font(.system(size: 28, weight: .light))
+                    .font(.system(size: 24, weight: .light))
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
             Text(model.isProcessing ? "Making room for your words…" : "No readable text yet")
-                .font(.title3.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Text(error ?? (model.isProcessing
                  ? model.processingCopy
                  : "This page may contain a photo or an illustration. You can browse the original, or try recovering the document’s text again."))
-                .font(.callout)
+                .font(.system(size: 12.5))
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             if let sourceError = model.sourceError {
-                Text(sourceError).font(.caption).foregroundStyle(ReaderTheme.secondaryText)
+                Text(sourceError).font(.system(size: 11)).foregroundStyle(ReaderTheme.secondaryText)
                 Button("Retry original") { model.retrySource() }
+                    .buttonStyle(StudioSecondaryButtonStyle())
             } else if model.sourceLoading {
-                Text("Preparing the original preview…").font(.caption).foregroundStyle(ReaderTheme.secondaryText)
+                Text("Preparing the original preview…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
             }
             if !model.isProcessing {
                 Button("Recover document text…", action: onRecover)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(StudioSecondaryButtonStyle())
             }
         }
         .frame(maxWidth: 380)
@@ -591,23 +805,41 @@ private struct ReaderStatusStrip<Actions: View>: View {
     @ViewBuilder var actions: () -> Actions
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            if busy { ProgressView().controlSize(.small).accessibilityLabel(title) }
-            else { Image(systemName: symbol).foregroundStyle(ReaderTheme.secondaryText).accessibilityHidden(true) }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.callout.weight(.medium))
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+        HStack(alignment: .center, spacing: 11) {
+            Group {
+                if busy {
+                    ProgressView().controlSize(.mini).accessibilityLabel(title)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ReaderTheme.warning)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 12, weight: .medium))
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            actions().controlSize(.small).fixedSize()
+            actions().fixedSize()
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .glassCard(radius: 8)
+        .background(ReaderTheme.surface,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -621,7 +853,7 @@ struct ToastView: View {
                               title: toast.isError ? "Action needed" : toast.text,
                               detail: toast.isError ? toast.text : "") {
                 Button { model.toast = nil } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(StudioIconButtonStyle(size: 24))
                     .accessibilityLabel("Dismiss notification")
                     .help("Dismiss notification")
             }
@@ -634,9 +866,12 @@ private struct ReadingAppearancePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Reading appearance").font(.headline)
+            Text("Reading appearance")
+                .font(.system(size: 13, weight: .semibold))
             VStack(alignment: .leading, spacing: 8) {
-                Text("Typeface").font(.callout)
+                Text("Typeface")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
                 Picker("Reading typeface", selection: Binding(
                     get: { model.prefs.readingFont ?? "sans" }, set: { model.prefs.readingFont = $0 }
                 )) {
@@ -648,19 +883,24 @@ private struct ReadingAppearancePopover: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Text size")
+                    Text("Text size").font(.system(size: 12))
                     Spacer()
-                    Text("\(Int(model.prefs.size)) pt").monospacedDigit().foregroundStyle(ReaderTheme.secondaryText)
+                    Text("\(Int(model.prefs.size)) pt")
+                        .font(ReaderTheme.numeral(11))
+                        .foregroundStyle(ReaderTheme.secondaryText)
                 }
                 Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
+                    .tint(ReaderTheme.accent)
                     .accessibilityValue("\(Int(model.prefs.size)) points")
             }
-            .font(.callout)
             Toggle("Reading guide", isOn: $model.prefs.guide)
+                .font(.system(size: 12))
                 .help("Emphasize the current phrase while keeping surrounding text readable")
-            Divider()
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             VStack(alignment: .leading, spacing: 8) {
-                Text("Appearance").font(.callout)
+                Text("Appearance")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
                 Picker("Appearance", selection: $model.prefs.appearance) {
                     Text("System").tag(Appearance.system)
                     Text("Light").tag(Appearance.light)
@@ -670,7 +910,7 @@ private struct ReadingAppearancePopover: View {
             }
         }
         .padding(20)
-        .frame(width: 310)
+        .frame(width: 300)
         .foregroundStyle(ReaderTheme.primaryText)
         .glassPanel(radius: 14)
     }
@@ -682,22 +922,36 @@ private struct DocumentDetailsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("Document details", systemImage: "doc.text.magnifyingglass").font(.headline)
+            HStack(spacing: 9) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ReaderTheme.accent)
+                Text("DOCUMENT DETAILS")
+                    .font(ReaderTheme.micro(9.5))
+                    .tracking(1.4)
+                    .foregroundStyle(ReaderTheme.secondaryText)
+            }
             Text(model.activeDoc?.title ?? "Document")
-                .font(.title2.weight(.semibold)).textSelection(.enabled)
-            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 12) {
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.3)
+                .textSelection(.enabled)
+            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 12) {
                 detail("Original file", value: model.activeDoc?.file_name ?? "—")
                 detail("Pages", value: String(max(model.sourcePageCount, model.activeDoc?.pageCount ?? 0)))
                 detail("Available words", value: model.wordsTotal.formatted())
                 detail("Text recovery", value: model.isProcessing ? "In progress" : (model.canRead ? "Readable" : "No text available"))
             }
-            .font(.callout)
+            .font(.system(size: 12))
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             Text("Read Along keeps a managed copy on this Mac. Your original file is unchanged.")
-                .font(.caption).foregroundStyle(ReaderTheme.secondaryText)
-            HStack { Spacer(); Button("Done") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .keyboardShortcut(.defaultAction) }
+                .font(.system(size: 11))
+                .foregroundStyle(ReaderTheme.tertiaryText)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(StudioPrimaryButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+            }
         }
         .padding(28)
         .frame(width: 440)
@@ -736,10 +990,9 @@ private struct ReaderSplitAutosave: NSViewRepresentable {
                    split.bounds.width > 0 {
                     guard configuredName != name else { return }
                     configuredName = name
-                    let key = "ReadAlong.readerSplit.v2.\(name)"
-                    let saved = UserDefaults.standard.object(forKey: "NSSplitView Subview Frames \(key)") != nil
+                    let key = "ReadAlong.readerSplit.v4.\(name)"
                     split.autosaveName = NSSplitView.AutosaveName(key)
-                    if !saved { split.setPosition(split.bounds.width * 0.30, ofDividerAt: 0) }
+                    split.dividerStyle = .thin
                     return
                 }
                 ancestor = view.superview

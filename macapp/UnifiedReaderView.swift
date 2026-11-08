@@ -187,7 +187,7 @@ struct UnifiedDocumentView: View {
             Canvas { ctx, size in
                 let lineWidth = max(2, size.width * 0.0022)
                 for (boxes, stroke, fill) in [
-                    (boxesForPage(pageIndex), Color(red: 0.96, green: 0.73, blue: 0.26), Color(red: 0.96, green: 0.73, blue: 0.26).opacity(0.18)),
+                    (boxesForPage(pageIndex), ReaderTheme.pageCurrent, ReaderTheme.pageCurrent.opacity(0.18)),
                 ] {
                     for b in boxes {
                         let rect = CGRect(

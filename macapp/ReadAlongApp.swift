@@ -11,6 +11,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         BackendService.shared.start()
+        if ProcessInfo.processInfo.environment["READALONG_OPEN_SETTINGS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                NSApp.activate(ignoringOtherApps: true)
+                for top in NSApp.mainMenu?.items ?? [] {
+                    for item in top.submenu?.items ?? [] where item.title.hasPrefix("Settings") {
+                        if let action = item.action {
+                            NSApp.sendAction(action, to: item.target, from: item)
+                        }
+                        return
+                    }
+                }
+            }
+        }
         // Reader-context keys only. A menu key equivalent would also steal
         // spaces and brackets while the user is typing in search or the editor.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -104,9 +117,9 @@ struct ReadAlongApp: App {
             ContentView()
                 .environmentObject(model)
         }
-        .defaultSize(width: 1360, height: 900)
+        .defaultSize(width: 1320, height: 880)
         .windowResizability(.contentMinSize)
-        .windowToolbarStyle(.unified)
+        .windowStyle(.hiddenTitleBar)
         .commands { readerCommands }
 
         Settings {
@@ -153,6 +166,15 @@ struct ReadAlongApp: App {
                 ReaderModel.shared.togglePlay()
             }
             .disabled(ReaderModel.shared.pageModel.words.isEmpty)
+            Divider()
+            Button("Text View") { ReaderModel.shared.expandedPane = .text }
+                .keyboardShortcut("1", modifiers: .command)
+                .disabled(ReaderModel.shared.pageModel.words.isEmpty)
+            Button("Original View") { ReaderModel.shared.expandedPane = .original }
+                .keyboardShortcut("2", modifiers: .command)
+            Button("Split View") { ReaderModel.shared.expandedPane = nil }
+                .keyboardShortcut("3", modifiers: .command)
+                .disabled(ReaderModel.shared.pageModel.words.isEmpty)
             Divider()
             Button("Previous Phrase") { ReaderModel.shared.movePhrase(-1) }
                 .keyboardShortcut("[", modifiers: .command)

@@ -61,6 +61,8 @@ final class ReaderModel: ObservableObject {
     @Published var viewer = ViewerState() {
         didSet { scheduleViewerSave() }
     }
+    /// nil = split, .text = text only, .original = source only.
+    @Published var expandedPane: ViewPane?
     @Published var documentLoadingMessage: String?
     @Published var operationError: String?
     @Published var sourceURL: URL?

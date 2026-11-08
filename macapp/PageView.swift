@@ -17,22 +17,26 @@ struct PageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isPDF, showsToolbar {
-                SourceViewerToolbar(controller: controller)
-            }
+            panelHeader
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topTrailing) {
-                    if !model.viewer.sourceFollows, model.sourceData != nil {
-                        Button("Return to reading") { model.returnToReading() }
-                            .controlSize(.small)
-                            .padding(12)
-                            .help("Jump the original page back to the live reading position")
-                    }
-                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReaderTheme.canvas)
+        .background(ReaderTheme.surface,
+                    in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            if isPDF, hasSource, showsToolbar {
+                SourceViewerToolbar(controller: controller)
+                    .padding(.bottom, 14)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         .onAppear {
             controller.onUserNavigate = { page in
                 model.viewer.browsedPage = max(0, page - 1)
@@ -47,24 +51,65 @@ struct PageView: View {
         }
     }
 
+    private var hasSource: Bool {
+        model.sourceData != nil && !(model.sourceData?.isEmpty ?? true)
+    }
+
+    private var panelHeader: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text("ORIGINAL")
+                    .font(ReaderTheme.micro(9.5))
+                    .tracking(1.3)
+                    .foregroundStyle(ReaderTheme.secondaryText)
+                Text("·")
+                    .font(ReaderTheme.micro(9.5))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+                Text(isPDF ? "PDF" : "IMAGE")
+                    .font(ReaderTheme.micro(9.5))
+                    .tracking(0.8)
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+            }
+            Spacer(minLength: 8)
+            if !model.viewer.sourceFollows, model.sourceData != nil {
+                Button { model.returnToReading() } label: {
+                    Label("Return to reading", systemImage: "arrow.uturn.backward")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(ReaderTheme.raised, in: Capsule(style: .continuous))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help("Jump the original page back to the live reading position")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     @ViewBuilder private var content: some View {
         if model.sourceLoading {
-            VStack(spacing: 10) {
-                ProgressView()
-                Text("Loading original…").font(.caption).foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            loadingView
         } else if let error = model.sourceError {
             ScrollView([.vertical, .horizontal]) { SpacedPageView() }
                 .overlay(alignment: .top) {
                     HStack(spacing: 10) {
-                        Text(error).font(.caption).lineLimit(2)
+                        Text(error).font(.system(size: 11)).lineLimit(2)
                         Button("Retry") { model.loadSource(force: true) }
-                            .controlSize(.small)
+                            .buttonStyle(StudioSecondaryButtonStyle())
                     }
-                    .padding(8)
-                    .glassCard(radius: 8)
-                    .padding(8)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(ReaderTheme.raised, in: Capsule(style: .continuous))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                    }
+                    .padding(14)
                 }
         } else if let data = model.sourceData, !data.isEmpty {
             if isPDF {
@@ -88,6 +133,34 @@ struct PageView: View {
         }
     }
 
+    private var loadingView: some View {
+        VStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("PAGE")
+                    .font(ReaderTheme.micro(8))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.black.opacity(0.35))
+                ForEach([1.0, 0.86, 0.94, 0.7], id: \.self) { fraction in
+                    Capsule().fill(Color.black.opacity(0.09))
+                        .frame(width: 180 * fraction, height: 5)
+                }
+            }
+            .padding(24)
+            .frame(width: 240, height: 186, alignment: .topLeading)
+            .background(Color(red: 0.97, green: 0.965, blue: 0.945),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .shadow(color: .black.opacity(0.20), radius: 18, y: 10)
+            .accessibilityHidden(true)
+            HStack(spacing: 9) {
+                ProgressView().controlSize(.small)
+                Text("Loading the original…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var rasterFallback: some View {
         ScrollViewReader { proxy in
             ScrollView([.vertical, .horizontal]) {
@@ -100,7 +173,6 @@ struct PageView: View {
                     }
                 }
             }
-
         }
     }
 
@@ -113,8 +185,8 @@ struct PageView: View {
     }
 }
 
-/// The page itself: white paper on a macOS gray canvas, with amber/blue rounded
-/// stroke rectangles aligned to the words on that page.
+/// The page itself: white paper on a matte panel, with amber/blue
+/// rounded stroke rectangles aligned to the words on that page.
 struct SpacedPageView: View {
     @EnvironmentObject private var model: ReaderModel
 
@@ -139,9 +211,9 @@ struct SpacedPageView: View {
                 .aspectRatio(aspect, contentMode: .fit)
                 .overlay(
                     RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(ReaderTheme.glassBorder)
+                        .strokeBorder(Color.black.opacity(0.08))
                 )
-                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+                .shadow(color: .black.opacity(0.24), radius: 20, y: 8)
             overlayCanvas
             boxAnchors
         }
@@ -165,13 +237,13 @@ struct SpacedPageView: View {
 
     var placeholder: some View {
         VStack(spacing: 10) {
-            ProgressView()
+            ProgressView().controlSize(.small)
             Text(model.isProcessing ? "Loading the original…" : "Page")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 11))
+                .foregroundStyle(ReaderTheme.tertiaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.vertical, 200)
+        .padding(.vertical, 160)
         .accessibilityLabel(model.isProcessing ? "Loading the original" : "Page")
     }
 
@@ -180,8 +252,8 @@ struct SpacedPageView: View {
             Canvas { ctx, size in
                 let lineWidth = max(2, size.width * 0.0022)
                 for (boxes, stroke, fill) in [
-                    (currentBoxes, Color(red: 0.96, green: 0.73, blue: 0.26), Color(red: 0.96, green: 0.73, blue: 0.26).opacity(0.18)),
-                    (nextBoxes, Color.accentColor, Color.accentColor.opacity(0.10)),
+                    (currentBoxes, ReaderTheme.pageCurrent, ReaderTheme.pageCurrent.opacity(0.18)),
+                    (nextBoxes, ReaderTheme.pageNext, ReaderTheme.pageNext.opacity(0.10)),
                 ] {
                     for b in boxes {
                         let rect = CGRect(
@@ -208,6 +280,3 @@ struct SpacedPageView: View {
         model.groupBoxes(range: model.nextRange, page: model.displayPage)
     }
 }
-
-
-

@@ -21,26 +21,27 @@ struct TextPanel: View {
     private var isBrowsing: Bool { model.viewer.browsedPage != nil }
 
     private var syncCaption: String {
-        if editing { return "Editing page \(editPage + 1) · PDF is unchanged" }
-        if isBrowsing { return "Synced to PDF · browsing" }
-        if model.state.status == "listening" { return "Live · following your voice" }
-        return "Synced to PDF"
+        if editing { return "Source page stays unchanged" }
+        if isBrowsing { return "Browsing the original" }
+        if model.state.status == "listening" { return "Following your voice" }
+        return "In sync with the original"
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(ReaderTheme.separator).frame(height: 1)
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             bodyContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+        .background(ReaderTheme.surface,
+                    in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
-                .strokeBorder(ReaderTheme.separator, lineWidth: 1)
+            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
                 .allowsHitTesting(false)
         }
-        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         .onChange(of: model.library.active) { _, _ in
             editing = false
             saving = false
@@ -55,21 +56,27 @@ struct TextPanel: View {
 
     @ViewBuilder private var header: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(editing ? "Page \(editPage + 1) text" : "Page \(page + 1) of \(total) text")
-                    .font(.caption.weight(.semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(editing ? "EDITING" : "TEXT")
+                        .font(ReaderTheme.micro(9.5))
+                        .tracking(1.3)
+                        .foregroundStyle(editing ? ReaderTheme.accent : ReaderTheme.secondaryText)
+                    Text(editing ? "PAGE \(editPage + 1) OF \(total)" : "PAGE \(page + 1) OF \(total)")
+                        .font(ReaderTheme.numeral(9.5))
+                        .foregroundStyle(ReaderTheme.tertiaryText)
+                }
                 Text(syncCaption)
-                    .font(.caption2)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
             if !editing, isBrowsing || !model.viewer.textFollows {
                 Button { model.returnToReading() } label: {
-                    Label("Return to reading", systemImage: "arrow.uturn.backward")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "arrow.uturn.backward")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
+                .buttonStyle(StudioIconButtonStyle())
                 .help("Return both panes to the live reading position")
                 .accessibilityLabel("Return to reading")
             }
@@ -79,17 +86,16 @@ struct TextPanel: View {
                 Button {
                     startEditing()
                 } label: {
-                    Label(pageLines.isEmpty ? "Add text" : "Edit", systemImage: "pencil")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "pencil")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .help("Edit this page's text to fix OCR errors")
+                .buttonStyle(StudioIconButtonStyle())
+                .help("Edit this page’s text to fix OCR errors")
                 .accessibilityLabel(pageLines.isEmpty ? "Add text for page \(page + 1)" : "Edit text for page \(page + 1)")
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     @ViewBuilder private var bodyContent: some View {
@@ -106,50 +112,57 @@ struct TextPanel: View {
     @ViewBuilder private var editBody: some View {
         VStack(spacing: 0) {
             TextEditor(text: $draft)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: 12.5, design: .monospaced))
                 .disableAutocorrection(true)
-                .padding(8)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Rectangle().fill(ReaderTheme.separator).frame(height: 1)
-            HStack(spacing: 8) {
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+            HStack(spacing: 10) {
                 Text(dirty ? "Unsaved changes" : "No changes")
-                    .font(.caption2)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(dirty ? ReaderTheme.warning : ReaderTheme.tertiaryText)
                 Spacer(minLength: 4)
                 Button("Cancel") { requestCancel() }
+                    .buttonStyle(StudioSecondaryButtonStyle())
                     .controlSize(.small)
                     .disabled(saving)
                 Button("Save") { save() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(StudioPrimaryButtonStyle())
                     .controlSize(.small)
                     .disabled(!dirty || saving)
-                    .help("Save this page's text and rebuild its reading positions")
+                    .help("Save this page’s text and rebuild its reading positions")
             }
-            .padding(8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(ReaderTheme.raised.opacity(0.55))
         }
     }
 
     @ViewBuilder private var emptyPageBody: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "text.page")
-                .font(.system(size: 26, weight: .light))
+                .font(.system(size: 22, weight: .light))
                 .foregroundStyle(ReaderTheme.secondaryText)
+                .frame(width: 44, height: 44)
+                .background(ReaderTheme.raised, in: Circle())
             Text("No text on page \(page + 1)")
-                .font(.callout.weight(.medium))
+                .font(.system(size: 14, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("No text was recovered for this page. Type it here and save — the PDF on the right stays the source of truth.")
-                .font(.caption)
+            Text("No text was recovered for this page. Type it here and save — the original on the right stays the source of truth.")
+                .font(.system(size: 11.5))
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 22)
             Button {
                 startEditing()
             } label: {
-                Label("Add text…", systemImage: "pencil")
+                Label("Add text", systemImage: "pencil")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(StudioSecondaryButtonStyle())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(20)

@@ -24,7 +24,9 @@ final class BackendService: ObservableObject {
 
     private init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        dataURL = support.appendingPathComponent("ReadAlong", isDirectory: true)
+        dataURL = ProcessInfo.processInfo.environment["READALONG_DATA"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? support.appendingPathComponent("ReadAlong", isDirectory: true)
         let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         logURL = library.appendingPathComponent("Logs/ReadAlong/backend.log")
         do {

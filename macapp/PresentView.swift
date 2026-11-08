@@ -58,84 +58,114 @@ struct PresentView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 16) {
-            Text(model.activeDoc?.title ?? "Focus")
-                .font(.headline)
-                .foregroundStyle(ReaderTheme.secondaryText)
-                .lineLimit(1)
-                .opacity(chrome ? 1 : 0)
-                .accessibilityHidden(!chrome)
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.book.closed.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ReaderTheme.accent)
+                Text(model.activeDoc?.title ?? "Focus")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .lineLimit(1)
+            }
+            .opacity(chrome ? 1 : 0)
+            .accessibilityHidden(!chrome)
             Spacer(minLength: 12)
             if microphoneActive {
-                Label("Microphone on", systemImage: "mic.fill")
-                    .font(.callout)
-                    .foregroundStyle(ReaderTheme.primaryText)
-                    .accessibilityLabel("Microphone active")
+                HStack(spacing: 6) {
+                    Circle().fill(ReaderTheme.accent).frame(width: 5, height: 5)
+                    Text("Microphone on")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ReaderTheme.primaryText)
+                }
+                .accessibilityLabel("Microphone active")
             }
             Button(action: model.exitPresent) {
                 Label("Exit Focus", systemImage: "xmark")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .background(ReaderTheme.raised, in: Capsule(style: .continuous))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                    }
             }
+            .buttonStyle(.plain)
             .focused($focusedControl, equals: .exit)
-            .buttonStyle(.bordered)
             .help("Exit Focus (Escape)")
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 22)
         .padding(.vertical, 12)
         .background(ReaderTheme.canvas)
-        .glassPanel(radius: 0)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+        }
         .onHover { hovering in pointerOverControls = hovering; revealControls() }
     }
 
     private var presentBar: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 14) {
             Button { model.movePhrase(-1) } label: {
-                Label("Previous phrase", systemImage: "backward.end.fill")
+                Image(systemName: "backward.end.fill")
+                    .font(.system(size: 10))
+                    .frame(width: 30, height: 30)
             }
+            .buttonStyle(StudioIconButtonStyle(size: 30))
             .focused($focusedControl, equals: .previous)
             .help("Previous phrase (⌘[)")
 
             Button(action: model.togglePlay) {
-                Label(model.transportTitle, systemImage: model.transportSymbol)
-                    .frame(minWidth: 22, minHeight: 22)
+                HStack(spacing: 7) {
+                    Image(systemName: model.transportSymbol)
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(model.isComplete ? "Read again" : model.transportState.isActive ? "Stop" : "Listen")
+                }
             }
             .focused($focusedControl, equals: .transport)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(StudioPrimaryButtonStyle())
             .help(model.transportTitle)
             .disabled(model.transportState == .stopping || model.wordsTotal == 0)
 
             Button { model.movePhrase(1) } label: {
-                Label("Next phrase", systemImage: "forward.end.fill")
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 10))
+                    .frame(width: 30, height: 30)
             }
+            .buttonStyle(StudioIconButtonStyle(size: 30))
             .focused($focusedControl, equals: .next)
             .help("Next phrase (⌘])")
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.transportTitle).font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.transportTitle)
+                    .font(.system(size: 12, weight: .medium))
                 Text(model.transportSubtitle)
-                    .font(.caption)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(ReaderTheme.secondaryText)
                     .lineLimit(2)
             }
-            .frame(minWidth: 120, maxWidth: 250, alignment: .leading)
+            .frame(minWidth: 140, maxWidth: 280, alignment: .leading)
             .accessibilityElement(children: .combine)
 
+            Spacer(minLength: 6)
+
             Text("\(Int(model.progressPercent))%")
-                .font(.callout.monospacedDigit())
+                .font(ReaderTheme.numeral(11, weight: .medium))
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .accessibilityLabel("Reading progress, \(Int(model.progressPercent)) percent")
 
             Button(action: model.stopPlayback) {
-                Label("Stop reading", systemImage: "stop.fill")
+                Image(systemName: "stop.fill")
+                    .frame(width: 30, height: 30)
             }
+            .buttonStyle(StudioIconButtonStyle(size: 30))
             .focused($focusedControl, equals: .stop)
             .disabled(model.transportState == .idle)
             .help("Stop reading")
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
         .foregroundStyle(ReaderTheme.primaryText)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .glassPanel(radius: 16)
         .fixedSize(horizontal: false, vertical: true)
         .onHover { hovering in pointerOverControls = hovering; revealControls() }

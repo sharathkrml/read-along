@@ -1,80 +1,52 @@
 import SwiftUI
 
-/// Inset reading dock. The parent reserves its measured height with safeAreaInset.
+/// One compact control surface for reading: transport, state, and position.
 struct PlayerBar: View {
-    /// Reserved height so the scrollable text/document panes never extend
-    /// underneath the player bar (NSViewRepresentable children don't always
-    /// participate in SwiftUI safe-area layout).
-    static let measuredHeight: CGFloat = 92
+    /// Reserved height so scrollable panes never run under the dock.
+    static let measuredHeight: CGFloat = 78
 
     @EnvironmentObject private var model: ReaderModel
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorSchemeContrast) private var contrast
     @State private var isScrubbing = false
     @State private var scrubValue = 0.0
 
     var body: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 13) {
             transport
-
-            HStack(spacing: 10) {
-                Slider(value: $scrubValue, in: 0...1, onEditingChanged: scrubEditingChanged)
-                    .controlSize(.mini)
-                    .disabled(!model.canRead || model.transportState == .stopping)
-                    .accessibilityLabel("Reading position")
-                    .accessibilityValue("\(Int((scrubValue * 100).rounded())) percent")
-                    .help("Move the reading position. Release to continue; Escape to cancel.")
-                Text("\(Int((scrubValue * 100).rounded()))%")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(ReaderTheme.secondaryText)
-                    .frame(width: 34, alignment: .trailing)
-                    .accessibilityHidden(true)
-            }
-            .frame(height: 20)
-
-            HStack(spacing: 12) {
-                status
-                Spacer(minLength: 4)
+            Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
+            status
+            Spacer(minLength: 10)
+            progress
+            if !positionContext.isEmpty {
+                Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
                 Text(positionContext)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .font(ReaderTheme.numeral(10))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .frame(height: 54)
         .foregroundStyle(ReaderTheme.primaryText)
         .background {
-            let shape = RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
-            if reduceTransparency {
-                shape.fill(ReaderTheme.raised)
-            } else {
-                shape.fill(.regularMaterial)
-            }
+            RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
+                .fill(ReaderTheme.raised)
         }
         .overlay {
             RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
-                .strokeBorder(contrast == .increased ? ReaderTheme.primaryText : ReaderTheme.glassBorder,
-                              lineWidth: contrast == .increased ? 1.5 : 1)
-                .allowsHitTesting(false)
-                .blendMode(.plusLighter)
-            RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
-                .strokeBorder(ReaderTheme.glassEdge, lineWidth: 1)
-                .padding(-0.5)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(contrast == .increased ? 0 : 0.07), radius: 12, y: 4)
-        .padding(.horizontal, 16)
+        .shadow(color: .black.opacity(0.20), radius: 20, x: 0, y: 10)
+        .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
+        .frame(maxWidth: 980)
         .onAppear { scrubValue = progressFraction }
         .onChange(of: model.progressPercent) { _, _ in
             if !isScrubbing { scrubValue = progressFraction }
         }
         .onChange(of: model.library.active) { _, _ in cancelScrub() }
-
         .onDisappear { cancelScrub() }
         .onExitCommand {
             if isScrubbing { cancelScrub() }
@@ -84,44 +56,49 @@ struct PlayerBar: View {
     }
 
     private var transport: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 3) {
             Button { model.movePhrase(-1) } label: {
                 Image(systemName: "backward.end.fill")
+                    .font(.system(size: 9))
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .buttonStyle(StudioIconButtonStyle(size: 26))
             .disabled(!model.canRead || model.cursor <= 0 || model.transportState == .stopping)
             .accessibilityLabel("Previous phrase")
             .help("Previous phrase (⌘[)")
 
             Button(action: primaryAction) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     if isBusy {
                         if reduceMotion {
-                            Image(systemName: "hourglass").accessibilityHidden(true)
+                            Image(systemName: "hourglass")
+                                .accessibilityHidden(true)
                         } else {
-                            ProgressView().controlSize(.mini).accessibilityHidden(true)
+                            ProgressView().controlSize(.mini).tint(ReaderTheme.accentInk).accessibilityHidden(true)
                         }
                     }
                     Image(systemName: model.isComplete ? "arrow.counterclockwise" : model.transportSymbol)
+                        .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
                     Text(primaryTitle).lineLimit(1)
+                    Text("Space")
+                        .font(ReaderTheme.numeral(8.5, weight: .medium))
+                        .opacity(0.72)
+                        .padding(.horizontal, 4)
+                        .frame(height: 16)
+                        .background(ReaderTheme.accentInk.opacity(0.16),
+                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
-                .font(.callout.weight(.semibold))
-                .frame(width: 132, height: 28)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
+            .buttonStyle(StudioPrimaryButtonStyle())
             .disabled(model.transportState == .stopping || (!model.canRead && !canStop))
             .accessibilityLabel(primaryTitle)
-            .help(primaryTitle)
+            .help(model.transportTitle)
 
             Button { model.movePhrase(1) } label: {
                 Image(systemName: "forward.end.fill")
+                    .font(.system(size: 9))
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .buttonStyle(StudioIconButtonStyle(size: 26))
             .disabled(!model.canRead || model.isComplete || model.transportState == .stopping)
             .accessibilityLabel("Next phrase")
             .help("Next phrase (⌘])")
@@ -129,22 +106,60 @@ struct PlayerBar: View {
     }
 
     private var status: some View {
-        HStack(spacing: 5) {
-            Image(systemName: statusSymbol).accessibilityHidden(true)
-            Text(statusText).lineLimit(1).truncationMode(.tail)
+        HStack(spacing: 7) {
             if microphoneIsOn {
-                ProgressView(value: microphoneLevel)
-                    .frame(width: 40)
-                    .accessibilityLabel("Microphone input level")
+                MicMeter(level: microphoneLevel)
+            } else if let symbol = statusSymbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 10))
+                    .foregroundStyle(statusColor)
+                    .accessibilityHidden(true)
             }
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundStyle(statusColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(statusText)
         }
-        .font(.caption)
-        .foregroundStyle(model.transportState == .failed ? Color.red : ReaderTheme.secondaryText)
-        .help(statusText)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 
-    private var primaryTitle: String { model.isComplete ? "Listen again" : model.transportTitle }
+    private var progress: some View {
+        HStack(spacing: 8) {
+            Slider(value: $scrubValue, in: 0...1, onEditingChanged: scrubEditingChanged)
+                .controlSize(.mini)
+                .tint(ReaderTheme.accent)
+                .frame(width: 152)
+                .disabled(!model.canRead || model.transportState == .stopping)
+                .accessibilityLabel("Reading position")
+                .accessibilityValue("\(displayPercent) percent")
+                .help("Move the reading position. Release to continue; Escape to cancel.")
+            Text("\(displayPercent)%")
+                .font(ReaderTheme.numeral(10))
+                .foregroundStyle(isScrubbing ? ReaderTheme.primaryText : ReaderTheme.secondaryText)
+                .frame(width: 32, alignment: .trailing)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var displayPercent: Int {
+        Int(((isScrubbing ? scrubValue : progressFraction) * 100).rounded())
+    }
+
+    private var primaryTitle: String {
+        if model.isComplete { return "Read again" }
+        switch model.transportState {
+        case .playing, .listening, .preparing, .stopping, .waitingForText, .paused:
+            return "Stop"
+        case .failed:
+            return "Try again"
+        case .idle:
+            return "Listen"
+        }
+    }
+
     private var isBusy: Bool {
         [.preparing, .stopping, .waitingForText].contains(model.transportState)
     }
@@ -163,41 +178,42 @@ struct PlayerBar: View {
     private var statusText: String {
         if isScrubbing { return "Release to move · Escape to cancel" }
         if let error = model.operationError, !error.isEmpty { return error }
-        if model.isComplete { return "Finished reading · Your place is saved." }
+        if model.isComplete { return "Finished · your place is saved" }
         if let loading = model.documentLoadingMessage, !loading.isEmpty { return loading }
         if microphoneIsOn {
-            return model.transportSubtitle.isEmpty ? "Microphone on · Listening" : "Microphone on · \(model.transportSubtitle)"
+            return model.transportSubtitle.isEmpty ? "Microphone on · listening" : model.transportSubtitle
         }
         if !model.transportSubtitle.isEmpty { return model.transportSubtitle }
         switch model.transportState {
-        case .preparing: return "Preparing speech engine…"
+        case .preparing: return "Preparing the speech engine…"
         case .waitingForText: return "Waiting for the next page…"
         case .stopping: return "Stopping…"
-        case .failed: return "Could not start. Try again or choose another input."
-        case .paused: return "Paused · Your place is saved."
-        case .playing: return "Listening"
-        case .listening: return "Listening"
-        case .idle: return model.isProcessing ? "Available text · More pages are being prepared" : "Your place is saved."
+        case .failed: return "Couldn’t start. Try again or choose another input."
+        case .paused: return "Paused · your place is saved"
+        case .playing, .listening: return "Listening"
+        case .idle: return model.isProcessing ? "Available text · more pages are being prepared" : "Your words. Your pace."
         }
     }
 
-    private var statusSymbol: String {
+    private var statusSymbol: String? {
         if model.operationError != nil || model.transportState == .failed { return "exclamationmark.triangle" }
-        if microphoneIsOn { return "mic.fill" }
         if model.isComplete { return "checkmark.circle" }
-        if isBusy || model.documentLoadingMessage != nil { return "hourglass" }
-        return "mic.slash"
+        if isBusy || model.documentLoadingMessage != nil { return "clock" }
+        return nil
+    }
+
+    private var statusColor: Color {
+        if model.operationError != nil || model.transportState == .failed { return ReaderTheme.warning }
+        return ReaderTheme.secondaryText
     }
 
     private var positionContext: String {
-        var parts: [String] = []
-        if model.sourcePageCount > 0, !model.pageModel.words.isEmpty {
-            let index = isScrubbing
-                ? Int((scrubValue * Double(model.wordsTotal)).rounded(.down)) : model.cursor
-            let word = model.pageModel.words[min(max(0, index), model.pageModel.words.count - 1)]
-            parts.append("Page \(min(model.sourcePageCount, max(1, word.page + 1))) of \(model.sourcePageCount)")
-        }
-        return parts.joined(separator: " · ")
+        guard model.sourcePageCount > 0, !model.pageModel.words.isEmpty else { return "" }
+        let index = isScrubbing
+            ? Int((scrubValue * Double(model.wordsTotal)).rounded(.down)) : model.cursor
+        let word = model.pageModel.words[min(max(0, index), model.pageModel.words.count - 1)]
+        let page = min(model.sourcePageCount, max(1, word.page + 1))
+        return "Page \(page) / \(model.sourcePageCount)"
     }
 
     private func primaryAction() {
@@ -228,5 +244,22 @@ struct PlayerBar: View {
         }
         scrubValue = progressFraction
     }
+}
 
+/// Five small capsules that read the microphone without a full-width meter.
+private struct MicMeter: View {
+    let level: Double
+    private let bars = 5
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 2) {
+            ForEach(0..<bars, id: \.self) { index in
+                Capsule()
+                    .fill(Double(index) < level * Double(bars) ? ReaderTheme.accent : ReaderTheme.hairlineStrong)
+                    .frame(width: 2, height: 5 + CGFloat(index) * 1.8)
+            }
+        }
+        .frame(width: 18, height: 14)
+        .accessibilityLabel("Microphone input level")
+    }
 }

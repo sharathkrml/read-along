@@ -15,6 +15,16 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         }
     }
 
+    var detail: String {
+        switch self {
+        case .reading: return "Type, size, and the guide that follows your voice."
+        case .voice: return "The microphone used when you read aloud."
+        case .appearance: return "Theme, sound, and haptics."
+        case .processing: return "How new pages are read and which models are installed."
+        case .about: return "Version, privacy, and model licenses."
+        }
+    }
+
     var symbol: String {
         switch self {
         case .reading: return "text.book.closed"
@@ -29,38 +39,19 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject private var model: ReaderModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var category: SettingsCategory? = .reading
+    @State private var category: SettingsCategory = .reading
     @State private var permission = AVCaptureDevice.authorizationStatus(for: .audio)
 
     var body: some View {
-        NavigationSplitView(columnVisibility: .constant(.all)) {
-            List(SettingsCategory.allCases, selection: $category) { item in
-                Label(item.title, systemImage: item.symbol)
-                    .tag(item)
-                    .padding(.vertical, 4)
-            }
-            .listStyle(.sidebar)
-            .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 240)
-        } detail: {
-            Form {
-                switch category ?? .reading {
-                case .reading: readingSettings
-                case .voice: voiceSettings
-                case .appearance: appearanceSettings
-                case .processing: processingSettings
-                case .about: aboutSettings
-                }
-            }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .contentMargins(.top, 8, for: .scrollContent)
-            .background(ReaderTheme.canvas)
-            .navigationTitle((category ?? .reading).title)
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle().fill(ReaderTheme.hairline).frame(width: 1)
+            detail
         }
-        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 780, idealWidth: 840, minHeight: 570, idealHeight: 620)
+        .background(ReaderTheme.canvas)
         .foregroundStyle(ReaderTheme.primaryText)
-        .frame(minWidth: 700, idealWidth: 740, minHeight: 520, idealHeight: 560)
+        .tint(ReaderTheme.accent)
         .preferredColorScheme(model.prefs.appearance == .system ? nil : model.prefs.appearance == .dark ? .dark : .light)
         .onAppear { model.refreshSetupAction() }
         .task(id: category) {
@@ -76,192 +67,301 @@ struct SettingsView: View {
         }
     }
 
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("SETTINGS")
+                .font(ReaderTheme.micro(9.5))
+                .tracking(1.5)
+                .foregroundStyle(ReaderTheme.secondaryText)
+                .padding(.horizontal, 14)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+
+            ForEach(SettingsCategory.allCases) { item in
+                Button { category = item } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(item == category ? ReaderTheme.accent : ReaderTheme.tertiaryText)
+                            .frame(width: 18)
+                        Text(item.title)
+                            .font(.system(size: 12.5, weight: item == category ? .medium : .regular))
+                            .foregroundStyle(item == category ? ReaderTheme.primaryText : ReaderTheme.secondaryText)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 9)
+                    .frame(height: 32)
+                    .background {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(item == category ? ReaderTheme.selection : Color.clear)
+                    }
+                    .overlay {
+                        if item == category {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 16)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 9.5))
+                    Text("Everything stays on this Mac")
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(ReaderTheme.tertiaryText)
+                Text("Read Along \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")")
+                    .font(ReaderTheme.numeral(9.5))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 16)
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 218)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(ReaderTheme.sidebar)
+    }
+
+    private var detail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(category.title)
+                        .font(.system(size: 26, weight: .semibold))
+                        .tracking(-0.5)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(category.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                }
+                .padding(.bottom, 2)
+
+                switch category {
+                case .reading: readingSettings
+                case .voice: voiceSettings
+                case .appearance: appearanceSettings
+                case .processing: processingSettings
+                case .about: aboutSettings
+                }
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(ReaderTheme.canvas)
+    }
+
     private var readingSettings: some View {
-        Group {
-            Section("Text") {
-                VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard(title: "Text") {
+                SettingsRow("Reading font", detail: "Serif is comfortable for long pages.") {
                     Picker("Reading font", selection: Binding(
                         get: { model.prefs.readingFont ?? "sans" },
                         set: { model.prefs.readingFont = $0 }
                     )) {
-                        Text("SF Pro · Sans serif").tag("sans")
+                        Text("SF Pro · Sans").tag("sans")
                         Text("New York · Serif").tag("serif")
-                        Text("SF Mono · Monospaced").tag("mono")
+                        Text("SF Mono").tag("mono")
                     }
-                    LabeledContent("Text size") {
-                        HStack(spacing: 12) {
-                            Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
-                                .frame(maxWidth: 180)
-                            Text("\(Int(model.prefs.size)) pt")
-                                .monospacedDigit()
-                                .foregroundStyle(ReaderTheme.secondaryText)
-                                .frame(width: 44, alignment: .trailing)
-                        }
-                    }
-                    Toggle("Reading guide", isOn: $model.prefs.guide)
-                        .help("Emphasize the current phrase while keeping the rest of the text readable.")
+                    .labelsHidden()
+                    .frame(width: 186)
                 }
-                .padding(12)
-                .glassCard(radius: 12)
+                SettingsDivider()
+                SettingsRow("Text size") {
+                    HStack(spacing: 10) {
+                        Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
+                            .frame(width: 130)
+                        Text("\(Int(model.prefs.size)) pt")
+                            .font(ReaderTheme.numeral(10.5))
+                            .foregroundStyle(ReaderTheme.secondaryText)
+                            .frame(width: 38, alignment: .trailing)
+                    }
+                }
+                SettingsDivider()
+                Toggle(isOn: $model.prefs.guide) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reading guide").font(.system(size: 12.5))
+                        Text("Emphasize the current phrase and dim what surrounds it.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(ReaderTheme.secondaryText)
+                    }
+                }
+                .toggleStyle(.switch)
             }
-            Section("Preview") {
+
+            SettingsCard(title: "Preview") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Your words. Your pace.")
                         .foregroundStyle(ReaderTheme.readingInk)
-                        .padding(.horizontal, 6)
-                        .background(model.prefs.guide ? ReaderTheme.readingFill : ReaderTheme.surface,
-                                    in: RoundedRectangle(cornerRadius: 4))
+                        .padding(.horizontal, 5)
+                        .background(model.prefs.guide ? ReaderTheme.readingFill : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                     Text("Make a little room for a good read.")
                 }
                 .font(.system(size: model.prefs.size, design: readingFontDesign))
-                .lineSpacing(6)
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             }
-            .padding(12)
-            .glassCard(radius: 12)
-            Section {
-                Text("Follow me listens as you read aloud and moves the guide with your voice. Reading quietly never starts audio or the microphone.")
-                    .font(.callout)
-                    .foregroundStyle(ReaderTheme.secondaryText)
-            }
-            .padding(12)
-            .glassCard(radius: 12)
+
+            Text("Follow me listens as you read aloud and moves the guide with your voice. Reading quietly never starts audio or the microphone.")
+                .font(.system(size: 11))
+                .foregroundStyle(ReaderTheme.tertiaryText)
+                .lineSpacing(3)
+                .padding(.horizontal, 2)
         }
     }
 
     private var voiceSettings: some View {
-        Group {
-            Section("Follow me") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Input device", selection: Binding(
-                        get: { model.selectedMicID },
-                        set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }
-                    )) {
-                        Text("System default").tag(Int?.none)
-                        ForEach(model.microphones.devices) { mic in
-                            Text(mic.name).tag(Int?.some(mic.id))
-                        }
-                        if let id = model.selectedMicID, model.selectedMicrophone == nil {
-                            Text("Saved microphone · unavailable").tag(Int?.some(id))
-                        }
+        SettingsCard(title: "Follow me") {
+            SettingsRow("Input device", detail: "Used when you press Listen.") {
+                Picker("Input device", selection: Binding(
+                    get: { model.selectedMicID },
+                    set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }
+                )) {
+                    Text("System default").tag(Int?.none)
+                    ForEach(model.microphones.devices) { mic in
+                        Text(mic.name).tag(Int?.some(mic.id))
                     }
-                    if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
-                        Text("“\(name)” is unavailable. Reconnect it or choose another input device.")
-                            .font(.caption)
-                            .foregroundStyle(ReaderTheme.secondaryText)
+                    if let id = model.selectedMicID, model.selectedMicrophone == nil {
+                        Text("Saved microphone · unavailable").tag(Int?.some(id))
                     }
-                    LabeledContent("Microphone access", value: permissionLabel)
-                    Text("English only. Access is requested when you explicitly start Follow me, never just by opening Settings.")
-                        .font(.caption)
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                    Link("Microphone privacy settings…", destination: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
                 }
-                .padding(12)
-                .glassCard(radius: 12)
+                .labelsHidden()
+                .frame(width: 220)
             }
+            if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
+                Text("“\(name)” is unavailable. Reconnect it or choose another input device.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.warning)
+            }
+            SettingsDivider()
+            HStack {
+                Text("Microphone access").font(.system(size: 12.5))
+                Spacer()
+                Text(permissionLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+            }
+            Text("English only. Access is requested when you explicitly start Follow me, never just by opening Settings.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(ReaderTheme.tertiaryText)
+                .lineSpacing(2)
+            Link("Open Microphone privacy settings…",
+                 destination: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                .font(.system(size: 11.5))
         }
     }
 
     private var appearanceSettings: some View {
-        Group {
-            Section("Appearance") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Theme", selection: $model.prefs.appearance) {
-                        Text("System").tag(Appearance.system)
-                        Text("Light").tag(Appearance.light)
-                        Text("Dark").tag(Appearance.dark)
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard(title: "Theme") {
+                Picker("Theme", selection: $model.prefs.appearance) {
+                    Text("System").tag(Appearance.system)
+                    Text("Light").tag(Appearance.light)
+                    Text("Dark").tag(Appearance.dark)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                HStack(spacing: 11) {
+                    Image(systemName: "book.pages")
+                        .font(.system(size: 16, weight: .light))
+                        .foregroundStyle(ReaderTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Paper & ink")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Quiet surfaces with one signal color.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(ReaderTheme.secondaryText)
                     }
-                    .pickerStyle(.segmented)
-                    HStack(spacing: 12) {
-                        Image(systemName: "book.pages").font(.title2)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Paper & Ink").font(.headline)
-                            Text("Quiet surfaces. A clear reading guide.")
-                                .font(.caption)
-                                .foregroundStyle(ReaderTheme.secondaryText)
-                        }
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                 }
                 .padding(12)
-                .glassCard(radius: 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ReaderTheme.raised,
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                }
             }
-            Section("Feedback") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Interface sounds", isOn: $model.prefs.sound)
-                    Toggle("Haptic feedback", isOn: $model.prefs.haptic)
-                    Text("Haptics require supported hardware. Neither option is needed to follow your place.")
-                        .font(.caption)
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                }
-                .padding(12)
-                .glassCard(radius: 12)
+
+            SettingsCard(title: "Feedback") {
+                Toggle("Interface sounds", isOn: $model.prefs.sound)
+                    .toggleStyle(.switch)
+                SettingsDivider()
+                Toggle("Haptic feedback", isOn: $model.prefs.haptic)
+                    .toggleStyle(.switch)
+                Text("Haptics require supported hardware. Neither option is needed to follow your place.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+            } footer: {
+                EmptyView()
             }
         }
     }
 
     private var processingSettings: some View {
-        Group {
-            Section("New documents") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Text recovery", selection: $model.prefs.ocrMode) {
-                        Text("Auto · Recommended").tag("auto")
-                        Text("Printed · Fast").tag("fast")
-                        Text("Handwriting").tag("best")
-                    }
-                    Text("Auto uses Apple’s text reader for suitable printed pages and requests handwriting recognition only when needed. Printed is faster but less suitable for handwriting.")
-                        .font(.caption)
-                        .foregroundStyle(ReaderTheme.secondaryText)
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard(title: "New documents",
+                         footer: "Auto uses Apple’s text reader for suitable printed pages and requests handwriting recognition only when needed.") {
+                Picker("Text recovery", selection: $model.prefs.ocrMode) {
+                    Text("Auto · Recommended").tag("auto")
+                    Text("Printed · Fast").tag("fast")
+                    Text("Handwriting").tag("best")
                 }
-                .padding(12)
-                .glassCard(radius: 12)
+                .labelsHidden()
+                .frame(maxWidth: 240, alignment: .leading)
             }
-            Section("Optional models") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Text PDFs work without either model. Downloads are never started automatically.")
-                        .font(.callout)
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                    ModelCard(key: "ocr")
-                }
-                .padding(12)
-                .glassCard(radius: 12)
+
+            SettingsCard(title: "Optional model") {
+                Text("Text PDFs work without either model. Downloads are never started automatically.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+                ModelCard(key: "ocr")
             }
         }
     }
 
     private var aboutSettings: some View {
-        Group {
-            Section("Read Along") {
-                VStack(alignment: .leading, spacing: 10) {
-                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
-                    LabeledContent("Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")
-                }
-                .padding(12)
-                .glassCard(radius: 12)
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard(title: "Application") {
+                SettingsValueRow(label: "Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
+                SettingsDivider()
+                SettingsValueRow(label: "Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")
             }
-            Section("On this Mac") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("Your documents and voice are processed locally.", systemImage: "lock.shield")
-                    Text("No account is required. Imported documents are kept as managed copies; your original files are not changed. Optional model downloads contact their publishers. Installed macOS voices work offline.")
-                        .font(.callout)
+
+            SettingsCard(title: "On this Mac") {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "lock.shield")
+                        .foregroundStyle(ReaderTheme.accent)
+                    Text("Your documents and voice are processed locally. No account is required. Imported documents are kept as managed copies; your original files are not changed.")
+                        .font(.system(size: 11.5))
                         .foregroundStyle(ReaderTheme.secondaryText)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(12)
-                .glassCard(radius: 12)
+                Text("Optional model downloads contact their publishers. Installed macOS voices work offline.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
             }
-            Section("Model licenses") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Link("Voice following · CC BY 4.0 weights", destination: URL(string: "https://huggingface.co/FermionResearch/Phonon-2.5-English/blob/main/LICENSE-WEIGHTS-CC-BY-4.0.txt")!)
-                    Link("Handwriting · LFM 1.0 license", destination: URL(string: "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
-                    Text("Model identifiers, installation locations, and disk usage are in Processing & models → Advanced details.")
-                        .font(.caption)
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                }
-                .padding(12)
-                .glassCard(radius: 12)
+
+            SettingsCard(title: "Model licenses") {
+                Link("Voice following · CC BY 4.0 weights",
+                     destination: URL(string: "https://huggingface.co/FermionResearch/Phonon-2.5-English/blob/main/LICENSE-WEIGHTS-CC-BY-4.0.txt")!)
+                    .font(.system(size: 11.5))
+                Link("Handwriting · LFM 1.0 license",
+                     destination: URL(string: "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
+                    .font(.system(size: 11.5))
+            } footer: {
+                Text("Model identifiers, installation locations, and disk usage are in Processing & models → Advanced details.")
             }
         }
     }
@@ -283,7 +383,108 @@ struct SettingsView: View {
         @unknown default: return "Unknown"
         }
     }
+}
 
+private struct SettingsCard<Content: View, Footer: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    @ViewBuilder var footer: Footer
+
+    init(title: String, @ViewBuilder content: () -> Content) where Footer == EmptyView {
+        self.title = title
+        self.content = content()
+        self.footer = EmptyView()
+    }
+
+    init(title: String, footer: String, @ViewBuilder content: () -> Content) where Footer == Text {
+        self.title = title
+        self.content = content()
+        self.footer = Text(footer)
+    }
+
+    init(title: String, @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) {
+        self.title = title
+        self.content = content()
+        self.footer = footer()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(ReaderTheme.micro(9))
+                .tracking(1.3)
+                .foregroundStyle(ReaderTheme.tertiaryText)
+                .padding(.leading, 2)
+            VStack(alignment: .leading, spacing: 13) {
+                content
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ReaderTheme.surface,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+            }
+            if Footer.self != EmptyView.self {
+                footer
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+                    .lineSpacing(2)
+                    .padding(.horizontal, 2)
+                    .padding(.top, 1)
+            }
+        }
+    }
+}
+
+private struct SettingsRow<Control: View>: View {
+    let title: String
+    var detail: String?
+    @ViewBuilder var control: Control
+
+    init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.detail = detail
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 12.5))
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                }
+            }
+            Spacer(minLength: 8)
+            control
+        }
+    }
+}
+
+private struct SettingsValueRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(label).font(.system(size: 12.5))
+            Spacer()
+            Text(value)
+                .font(ReaderTheme.numeral(11))
+                .foregroundStyle(ReaderTheme.secondaryText)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+private struct SettingsDivider: View {
+    var body: some View {
+        Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+    }
 }
 
 enum ModelInstallPhase {
@@ -338,16 +539,19 @@ struct ModelCard: View {
     private var title: String { "Handwriting recognition" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(alignment: .top, spacing: 11) {
                 Image(systemName: "pencil.and.outline")
-                    .font(.title3)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ReaderTheme.accent)
+                    .frame(width: 32, height: 32)
+                    .background(ReaderTheme.accentSoft, in: Circle())
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.headline)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
                     Text("For handwriting and difficult scans · about 1.6 GB")
-                        .font(.caption)
+                        .font(.system(size: 10.5))
                         .foregroundStyle(ReaderTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -357,33 +561,38 @@ struct ModelCard: View {
 
             HStack(spacing: 8) {
                 if phase.busy {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.mini).tint(ReaderTheme.accent)
                 } else if phase == .ready {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ReaderTheme.success)
                 }
-                Text(phase.label).font(.callout)
+                Text(phase.label)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(phase == .ready ? ReaderTheme.success : ReaderTheme.secondaryText)
             }
             .accessibilityElement(children: .combine)
 
             if phase == .downloading {
                 if let progress = Self.downloadProgress(status) {
                     ProgressView(value: progress)
+                        .tint(ReaderTheme.accent)
                         .accessibilityLabel("\(title) download")
                         .accessibilityValue(status?.progress_is_approximate == false ? "\(Int(progress * 100)) percent" : "About \(Int(progress * 100)) percent")
                 }
                 Text(downloadBytes)
-                    .font(.caption.monospacedDigit())
+                    .font(ReaderTheme.numeral(10))
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
             if phase == .verifying || phase == .installing {
                 Text("The download is being checked and prepared before it can be used.")
-                    .font(.caption)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
             if phase == .error || !(status?.error ?? "").isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("The model action couldn’t finish.", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ReaderTheme.warning)
                     Text("Check your connection and available storage, then try again. You can keep reading available text.")
                         .foregroundStyle(ReaderTheme.secondaryText)
                     if let error = status?.error, !error.isEmpty {
@@ -392,11 +601,11 @@ struct ModelCard: View {
                         }
                     }
                 }
-                .font(.caption)
+                .font(.system(size: 10.5))
             }
             if phase == .interrupted || phase == .canceled {
                 Text("Retry when you’re ready. Available documents are still readable.")
-                    .font(.caption)
+                    .font(.system(size: 10.5))
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
 
@@ -429,14 +638,14 @@ struct ModelCard: View {
                         }
                     }
                 }
-                .font(.caption)
+                .font(.system(size: 10.5))
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 8)
             }
-            .font(.caption)
+            .font(.system(size: 11))
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
         .confirmationDialog("Remove handwriting model?", isPresented: confirmBinding, titleVisibility: .visible) {
             Button("Remove \(title)", role: .destructive) {
                 guard model.pendingRemove == key, !removalBlocked else { return }
@@ -453,14 +662,16 @@ struct ModelCard: View {
         switch phase {
         case .missing, .error, .interrupted, .canceled:
             Button(phase == .missing ? "Download" : "Retry") { model.downloadModel(key) }
-                .controlSize(.small)
+                .buttonStyle(StudioSecondaryButtonStyle())
                 .disabled(!model.ready)
         case .preparing, .downloading, .verifying, .installing:
             if status?.can_cancel == true {
-                Button("Cancel") { model.cancelModel(key) }.controlSize(.small)
+                Button("Cancel") { model.cancelModel(key) }
+                    .buttonStyle(StudioSecondaryButtonStyle())
             }
         case .checking:
-            Button("Check again") { model.refreshSetupAction() }.controlSize(.small)
+            Button("Check again") { model.refreshSetupAction() }
+                .buttonStyle(StudioSecondaryButtonStyle())
         case .ready, .removing:
             EmptyView()
         }

@@ -266,8 +266,8 @@ final class PDFSourceViewer: NSView {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let pad = max(2, bounds.width * 0.004)
         for (boxes, color) in [
-            (current, NSColor(srgbRed: 0.96, green: 0.73, blue: 0.26, alpha: 1)),
-            (next, NSColor.controlAccentColor),
+            (current, ReaderTheme.nsPageCurrent),
+            (next, ReaderTheme.nsPageNext),
         ] {
             for box in boxes {
                 let rect = CGRect(
@@ -301,8 +301,8 @@ final class OverlayImageView: NSImageView {
         guard let image, image.size.width > 0, image.size.height > 0 else { return }
         let size = bounds.size
         for (boxes, color) in [
-            (currentBoxes, NSColor(srgbRed: 0.96, green: 0.73, blue: 0.26, alpha: 1)),
-            (nextBoxes, NSColor.controlAccentColor),
+            (currentBoxes, ReaderTheme.nsPageCurrent),
+            (nextBoxes, ReaderTheme.nsPageNext),
         ] {
             for b in boxes {
                 let rect = CGRect(
@@ -432,23 +432,29 @@ struct ImageSourceRepresentable: NSViewRepresentable {
 struct SourceViewerToolbar: View {
     @ObservedObject var controller: PDFSourceController
     @State private var pageInput: String = ""
+
     var body: some View {
-        HStack(spacing: 6) {
-            Menu("Pages") {
-                ForEach(1...max(1, controller.totalPages), id: \.self) { page in
-                    Button("Page \(page)") { controller.goToPage(page) }
-                }
+        HStack(spacing: 2) {
+            Button { controller.goPrev() } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 24, height: 24)
             }
-            .menuStyle(.borderlessButton)
-            .controlSize(.small)
-            .fixedSize()
-            Button { controller.goPrev() } label: { Image(systemName: "chevron.left") }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(controller.currentPage <= 1)
-                .accessibilityLabel("Previous")
+            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .disabled(controller.currentPage <= 1)
+            .accessibilityLabel("Previous page")
+            .help("Previous page")
+
             TextField("", text: $pageInput)
-                .frame(width: 44)
+                .textFieldStyle(.plain)
+                .font(ReaderTheme.numeral(10.5, weight: .medium))
+                .multilineTextAlignment(.center)
+                .frame(width: 30, height: 20)
+                .background(ReaderTheme.canvas,
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                }
                 .onAppear { pageInput = "\(controller.currentPage)" }
                 .onChange(of: controller.currentPage) { _, v in pageInput = "\(v)" }
                 .onSubmit {
@@ -459,33 +465,70 @@ struct SourceViewerToolbar: View {
                     }
                 }
                 .onExitCommand { pageInput = "\(controller.currentPage)" }
+                .accessibilityLabel("Page number")
+
             Text("/ \(controller.totalPages)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Button { controller.goNext() } label: { Image(systemName: "chevron.right") }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(controller.currentPage >= controller.totalPages)
-                .accessibilityLabel("Next")
-            Button { controller.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Zoom out")
+                .font(ReaderTheme.numeral(10))
+                .foregroundStyle(ReaderTheme.tertiaryText)
+                .padding(.trailing, 4)
+
+            Button { controller.goNext() } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .disabled(controller.currentPage >= controller.totalPages)
+            .accessibilityLabel("Next page")
+            .help("Next page")
+
+            Rectangle().fill(ReaderTheme.hairlineStrong)
+                .frame(width: 1, height: 14)
+                .padding(.horizontal, 5)
+
+            Button { controller.zoomOut() } label: {
+                Image(systemName: "minus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .accessibilityLabel("Zoom out")
+            .help("Zoom out")
+
             Text("\(controller.zoomPercent)%")
-                .font(.caption2.monospacedDigit())
-            Button { controller.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Zoom in")
-            Menu("Fit") {
+                .font(ReaderTheme.numeral(10))
+                .foregroundStyle(ReaderTheme.secondaryText)
+                .frame(width: 38)
+                .accessibilityLabel("Zoom \(controller.zoomPercent) percent")
+
+            Button { controller.zoomIn() } label: {
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .accessibilityLabel("Zoom in")
+            .help("Zoom in")
+
+            Menu {
                 Button("Fit page") { controller.fitPage() }
                 Button("Fit width") { controller.fitWidth() }
                 Button("Actual size") { controller.actualSize() }
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 24)
+            .help("Fit")
+            .accessibilityLabel("Fit options")
         }
-        .padding(6)
-        .glassCard(radius: 8)
+        .padding(5)
+        .background(ReaderTheme.raised.opacity(0.97), in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 14, y: 6)
     }
 }
