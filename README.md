@@ -106,6 +106,9 @@ python readalong.py --no-asr             # backend only, no speech server
   your place.
 - **Follow me** — press Play and read aloud; the existing microphone tracking
   follows your voice. Both modes share one cursor and saved position.
+- **Live dock** — the strip below the transport shows the phrase you are reading,
+  or the live transcript while listening. The microphone menu on its right
+  switches input devices without leaving the page.
 - **Present** — a full-screen reading stage. `Esc` returns to the exact phrase.
 - **Edit text** — correct OCR line by line and export a proof JPEG when needed.
 - **Presentation-ready text** — multi-column slides are read down each column,

@@ -153,24 +153,19 @@ struct NativeChecks {
         checkEqual("prefs default guide", defaults.guide, true)
         checkEqual("prefs default ocr mode", defaults.ocrMode, "auto")
         checkEqual("prefs default font is legacy serif", defaults.readingFont, "serif")
-        checkEqual("prefs default mode", defaults.mode, .read)
         checkEqual("prefs default pane", defaults.pane, .text)
 
-        let legacy = try! decode(Prefs.self, #"{"size": 24, "speed": 1.5, "voice": "Samantha"}"#)
+        let legacy = try! decode(Prefs.self, #"{"size": 24, "voice": "Samantha"}"#)
         checkEqual("prefs legacy font fallback", legacy.readingFont, "serif")
         checkEqual("prefs legacy size", legacy.size, 24)
-        checkEqual("prefs legacy speed", legacy.speed, 1.5)
 
-        let clamped = try! decode(Prefs.self, #"{"size": 100, "speed": 9, "ocrMode": "turbo"}"#)
+        let clamped = try! decode(Prefs.self, #"{"size": 100, "ocrMode": "turbo"}"#)
         checkEqual("prefs size clamped", clamped.size, 32)
-        checkEqual("prefs speed clamped", clamped.speed, 2)
         checkEqual("prefs unknown ocr mode falls back", clamped.ocrMode, "auto")
-        let clampedLow = try! decode(Prefs.self, #"{"size": 4, "speed": 0.1}"#)
+        let clampedLow = try! decode(Prefs.self, #"{"size": 4}"#)
         checkEqual("prefs size floor", clampedLow.size, 16)
-        checkEqual("prefs speed floor", clampedLow.speed, 0.5)
-        let badEnums = try! decode(Prefs.self, #"{"pane": "bogus", "mode": "bogus"}"#)
+        let badEnums = try! decode(Prefs.self, #"{"pane": "bogus"}"#)
         checkEqual("prefs unknown pane falls back", badEnums.pane, .text)
-        checkEqual("prefs unknown mode falls back", badEnums.mode, .read)
     }
 
     // MARK: cursor/progress math

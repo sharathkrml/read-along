@@ -6,6 +6,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: ReaderModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dropTargeted = false
     @State private var dropError: String?
     @State private var sidebarVisible = true
@@ -25,6 +26,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1000, minHeight: 620)
+        .ignoresSafeArea(.all, edges: .top)
         .background(ReaderTheme.canvas)
         .preferredColorScheme(scheme)
         .task { await model.start() }
@@ -75,6 +77,12 @@ struct ContentView: View {
             Task { await model.importFile(at: url) }
             return true
         } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if model.presentVisible {
+                PresentView().transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.presentVisible)
     }
 
     private var scheme: ColorScheme? {
@@ -363,7 +371,6 @@ private struct WindowDragArea: NSViewRepresentable {
 struct DetailView: View {
     @EnvironmentObject private var model: ReaderModel
     @ObservedObject private var backend = BackendService.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmRecovery = false
     @StateObject private var splitController = PDFSourceController()
 
@@ -378,18 +385,12 @@ struct DetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.canvas)
         .foregroundStyle(ReaderTheme.primaryText)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .overlay(alignment: .bottom) {
             if model.canRead, model.documentLoadingMessage == nil {
                 PlayerBar()
                     .frame(maxWidth: .infinity)
             }
         }
-        .overlay {
-            if model.presentVisible {
-                PresentView().transition(.opacity)
-            }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.presentVisible)
         .confirmationDialog("Recover this document’s text again?", isPresented: $confirmRecovery,
                             titleVisibility: .visible) {
             Button("Recover document text", role: .destructive) { model.reOCR() }

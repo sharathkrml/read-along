@@ -259,7 +259,7 @@ struct PlayerBar: View {
 
     private var liveLabel: String {
         if model.isComplete { return "DONE" }
-        return microphoneIsOn ? "LIVE" : "UP NEXT"
+        return microphoneIsOn ? "LIVE" : "READING"
     }
 
     private var liveTextIsLive: Bool {

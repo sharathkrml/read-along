@@ -11,26 +11,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         BackendService.shared.start()
-        if ProcessInfo.processInfo.environment["READALONG_OPEN_SETTINGS"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                NSApp.activate(ignoringOtherApps: true)
-                for top in NSApp.mainMenu?.items ?? [] {
-                    for item in top.submenu?.items ?? [] where item.title.hasPrefix("Settings") {
-                        if let action = item.action {
-                            NSApp.sendAction(action, to: item.target, from: item)
-                        }
-                        break
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    let titles = NSApp.windows.map { "\($0.title)|\($0.className)" }
-                    try? titles.joined(separator: "\n").write(toFile: "/tmp/readalong-windows.txt", atomically: true, encoding: .utf8)
-                    for window in NSApp.windows where window.title.localizedCaseInsensitiveContains("settings") {
-                        window.makeKeyAndOrderFront(nil)
-                    }
-                }
-            }
+        // Let the custom title bar use the full window height so the traffic
+        // lights share the same row as the app mark. The window is created
+        // after applicationDidFinishLaunching, so wait for it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.configureWindowChrome()
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
         // Reader-context keys only. A menu key equivalent would also steal
         // spaces and brackets while the user is typing in search or the editor.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -46,6 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return event
         }
+    }
+
+    private func configureWindowChrome() {
+        for window in NSApp.windows where window.title == "Read Along" {
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.titlebarSeparatorStyle = .none
+        }
+    }
+
+    @objc private func windowDidBecomeKey(_ note: Notification) {
+        guard let window = note.object as? NSWindow, window.title == "Read Along" else { return }
+        configureWindowChrome()
     }
 
     @MainActor

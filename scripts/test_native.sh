@@ -25,6 +25,7 @@ xcrun swiftc -O -target arm64-apple-macos14.0 -framework Foundation \
   -o "$BIN" \
   "$ROOT/macapp/Models.swift" \
   "$ROOT/macapp/ReadingSession.swift" \
+  "$ROOT/macapp/ReaderTheme.swift" \
   "$ROOT/macapp/SourceViewer.swift" \
   "$ROOT/macapp/Tests/NativeChecks.swift"
 "$BIN" "$WORK/a"
