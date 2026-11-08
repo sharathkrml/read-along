@@ -47,6 +47,7 @@ dev:
 test:
 	.venv/bin/python test_align.py
 	.venv/bin/python test_library.py
+	.venv/bin/python test_speech_startup.py
 	./scripts/test_native.sh
 
 icon:

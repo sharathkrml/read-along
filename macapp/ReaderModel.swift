@@ -405,8 +405,10 @@ final class ReaderModel: ObservableObject {
         case "loading": transportState = .preparing
         case "error": if transportState == .listening || transportState == .preparing { transportState = .failed }
         default:
-            // Keep an explicit start in Preparing until it really begins or fails.
-            if transportState == .listening { transportState = .idle }
+            // Idle means not listening. Clear a stale Preparing latch so a
+            // background engine warm-up can never strand the UI in "Preparing…"
+            // until the user stops and restarts.
+            if transportState == .listening || transportState == .preparing { transportState = .idle }
         }
         // Polling must not cancel/restart an in-flight page image every tick.
         loadPageImage()
@@ -703,7 +705,9 @@ final class ReaderModel: ObservableObject {
             showToast("There is no readable text yet.", isError: true)
             return
         }
-        if state.status == "listening" {
+        if state.status == "listening" || transportState == .preparing {
+            // Toggle also cancels a start still waiting on the engine, so
+            // Space / Present / menu behave like the PlayerBar Stop button.
             stopFollow()
             return
         }

@@ -1545,7 +1545,7 @@ class ASR:
                     continue
         raise RuntimeError("no free port for the speech server")
 
-    def ensure(self) -> None:
+    def ensure(self, notify: bool = True) -> None:
         with self._lock:
             if self.port and self.healthy(self.port):
                 return
@@ -1561,7 +1561,8 @@ class ASR:
                 cmd + ["serve", ASR_MODEL, "--port", str(self.port)],
                 stdout=log, stderr=log, start_new_session=True,
             )
-            self.on_status("loading")
+            if notify:
+                self.on_status("loading")
             for _ in range(120):
                 if self.healthy(self.port):
                     return
@@ -2525,7 +2526,7 @@ class App:
     def start(self, doc_id: str | None = None) -> None:
         with self.lock:
             self.require_snapshot(doc_id)
-            if self.status in ("listening", "loading"):
+            if self.status == "listening" or (self.status == "loading" and self._want_listen):
                 return
             if not self.models.ready("speech"):
                 raise ValueError("Set up the speech model first — open Setup.")
@@ -3052,13 +3053,19 @@ def _startup(app: App, with_asr: bool) -> None:
 
 
 def _ensure_asr(app: App) -> None:
+    """Warm the engine in the background without touching user-visible status.
+
+    Microphone only opens on explicit start. A background warm-up failure stays
+    silent; the user's next start retries and reports it then. Never wipe a
+    user-requested loading state.
+    """
     try:
-        app.asr.ensure()
+        app.asr.ensure(notify=False)
         with app.lock:
-            if app.status == "loading" and not app.asr.running:
+            if app.status == "loading" and not app.asr.running and not app._want_listen:
                 app.status = "idle"
-    except Exception as e:
-        app._on_status("error", str(e))
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
