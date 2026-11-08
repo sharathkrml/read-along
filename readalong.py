@@ -2451,9 +2451,6 @@ class App:
                 save_cache(path, pages)
             if self.documents and doc_id:
                 self.documents.update(doc_id, total=len(model["words"]), pages=len(model["pages"]))
-            if doc_id == self.doc_id:
-                self._start_asr_early()
-
         try:
             model, pages = process_source(
                 path, progress=progress, fast=fast, phase=phase, on_page=on_page, auto=auto,
@@ -3048,8 +3045,9 @@ def _startup(app: App, with_asr: bool) -> None:
         if not app.load():
             app.ocr_now()
     finally:
-        if with_asr and app.source_path and app.models.ready("speech"):
-            _ensure_asr(app)
+        # ASR (Phonon) is started on demand by Follow me, not at launch, to
+        # keep baseline RAM down. _ensure_asr is retained for explicit warm-up.
+        pass
 
 
 def _ensure_asr(app: App) -> None:
