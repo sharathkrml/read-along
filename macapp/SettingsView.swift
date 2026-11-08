@@ -224,7 +224,7 @@ struct SettingsView: View {
 
     private var voiceSettings: some View {
         SettingsCard(title: "Follow me") {
-            SettingsRow("Input device", detail: "Used when you press Listen.") {
+            SettingsRow("Input device", detail: "Used when you press Follow me.") {
                 Picker("Input device", selection: Binding(
                     get: { model.selectedMicID },
                     set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }

@@ -107,8 +107,8 @@ struct PresentView: View {
     private var presentBar: some View {
         HStack(spacing: 14) {
             Button { model.movePhrase(-1) } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 10))
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 11, weight: .semibold))
                     .frame(width: 30, height: 30)
             }
             .buttonStyle(StudioIconButtonStyle(size: 30))
@@ -119,17 +119,17 @@ struct PresentView: View {
                 HStack(spacing: 7) {
                     Image(systemName: model.transportSymbol)
                         .font(.system(size: 10, weight: .semibold))
-                    Text(model.isComplete ? "Read again" : model.transportState.isActive ? "Stop" : "Listen")
+                    Text(model.isComplete ? "Read again" : model.transportState.isActive ? "Stop" : "Follow me")
                 }
             }
             .focused($focusedControl, equals: .transport)
             .buttonStyle(StudioPrimaryButtonStyle())
-            .help(model.transportTitle)
+            .help(model.transportTitle + " (Space)")
             .disabled(model.transportState == .stopping || model.wordsTotal == 0)
 
             Button { model.movePhrase(1) } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 10))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
                     .frame(width: 30, height: 30)
             }
             .buttonStyle(StudioIconButtonStyle(size: 30))

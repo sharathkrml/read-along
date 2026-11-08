@@ -156,13 +156,13 @@ final class ReaderModel: ObservableObject {
     var transportTitle: String {
         switch transportState {
         case .preparing: return "Preparing voice following…"
-        case .playing: return "Stop listening"
-        case .paused: return "Resume listening"
-        case .listening: return "Stop listening"
+        case .playing: return "Stop Follow me"
+        case .paused: return "Resume Follow me"
+        case .listening: return "Stop Follow me"
         case .stopping: return "Stopping…"
         case .waitingForText: return "Waiting for the next page…"
         case .failed: return "Try again"
-        case .idle: return isComplete ? "Listen again" : "Start listening"
+        case .idle: return isComplete ? "Read again" : "Start Follow me"
         }
     }
     var transportSubtitle: String {
@@ -180,7 +180,7 @@ final class ReaderModel: ObservableObject {
         switch transportState {
         case .playing: return "stop.fill"
         case .listening, .preparing, .stopping, .waitingForText: return "stop.fill"
-        default: return isComplete ? "arrow.counterclockwise" : "play.fill"
+        default: return isComplete ? "arrow.counterclockwise" : "mic.fill"
         }
     }
 

@@ -70,8 +70,8 @@ struct PlayerBar: View {
     private var transport: some View {
         HStack(spacing: 3) {
             Button { model.movePhrase(-1) } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 9))
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .semibold))
             }
             .buttonStyle(StudioIconButtonStyle(size: 26))
             .disabled(!model.canRead || model.cursor <= 0 || model.transportState == .stopping)
@@ -92,23 +92,16 @@ struct PlayerBar: View {
                         .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
                     Text(primaryTitle).lineLimit(1)
-                    Text("Space")
-                        .font(ReaderTheme.numeral(8.5, weight: .medium))
-                        .opacity(0.72)
-                        .padding(.horizontal, 4)
-                        .frame(height: 16)
-                        .background(ReaderTheme.accentInk.opacity(0.16),
-                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
             }
             .buttonStyle(StudioPrimaryButtonStyle())
             .disabled(model.transportState == .stopping || (!model.canRead && !canStop))
             .accessibilityLabel(primaryTitle)
-            .help(model.transportTitle)
+            .help(model.transportTitle + " (Space)")
 
             Button { model.movePhrase(1) } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 9))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
             }
             .buttonStyle(StudioIconButtonStyle(size: 26))
             .disabled(!model.canRead || model.isComplete || model.transportState == .stopping)
@@ -300,7 +293,7 @@ struct PlayerBar: View {
         case .failed:
             return "Try again"
         case .idle:
-            return "Listen"
+            return "Follow me"
         }
     }
 

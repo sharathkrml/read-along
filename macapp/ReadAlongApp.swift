@@ -153,7 +153,7 @@ struct ReadAlongApp: App {
                 let alert = NSAlert()
                 alert.messageText = "Read Along shortcuts"
                 alert.informativeText = """
-                Space: play/pause or listen in reader/source canvas (not while typing)
+                Space: start/stop Follow me in reader/source canvas (not while typing)
                 [ / ] in the reading canvas, or Cmd+[ / Cmd+]: previous/next phrase
                 Left/Right: browse source pages when source owns input
                 Cmd+O: import document
@@ -202,8 +202,8 @@ struct ReadAlongApp: App {
 }
 
 extension ReaderModel {
-    /// Label for the Reader ▸ Play / Pause menu item.
+    /// Label for the Reader ▸ Follow me menu item.
     var playLabel: String {
-        return isPlaying ? "Stop Listening" : "Listen"
+        return isPlaying ? "Stop Follow me" : "Start Follow me"
     }
 }
