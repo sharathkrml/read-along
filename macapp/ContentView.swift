@@ -233,75 +233,73 @@ struct DetailView: View {
         } else if !hasDocument {
             PlaceholderView()
         } else {
-            VStack(spacing: 0) {
-                if isPDFSource { SourceViewerToolbar(controller: splitController) }
-                HSplitView {
-                    if expandedPane != .original {
-                        textPane
-                            .frame(minWidth: 280, idealWidth: width * 0.45, maxWidth: .infinity,
-                                   maxHeight: .infinity)
-                            .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
-                            .simultaneousGesture(
-                                TapGesture().onEnded { if expandedPane == .text { expandedPane = nil } }
-                            )
-                            .overlay(alignment: .topTrailing) {
-                                expandButton(for: .text)
-                            }
-                    }
-                    if expandedPane != .text {
-                        PageView(sharedController: splitController, showsToolbar: false)
-                            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-                            .simultaneousGesture(
-                                TapGesture().onEnded { if expandedPane == .original { expandedPane = nil } }
-                            )
-                            .overlay(alignment: .topLeading) {
-                                expandButton(for: .original)
-                            }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var textPane: some View {
-        cardPane
-    }
-
-    private var cardPane: some View {
-        VStack(spacing: 0) {
-            if hasWords {
-                if !model.viewer.textFollows {
-                    HStack {
-                        Button {
-                            model.returnToReading()
-                        } label: {
-                            Label("Return to reading", systemImage: "arrow.uturn.backward")
+            // The PDF on the right is the source of truth: it owns the
+            // page toolbar and the page position, and the text panel on
+            // the left only mirrors whatever page the PDF is showing.
+            HSplitView {
+                if expandedPane != .original {
+                    textPane
+                        .frame(minWidth: 220, idealWidth: min(340, max(270, width * 0.30)), maxWidth: 380,
+                               maxHeight: .infinity)
+                        .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
+                        .simultaneousGesture(
+                            TapGesture().onEnded { if expandedPane == .text { expandedPane = nil } }
+                        )
+                        .overlay(alignment: .topTrailing) {
+                            expandButton(for: .text)
                         }
-                        .controlSize(.small)
-                        .buttonStyle(.borderless)
-                        .help("Return to the live reading position without stopping playback")
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    Rectangle()
-                        .fill(ReaderTheme.separator)
-                        .frame(height: 1)
                 }
-                ReaderTextView(stage: false)
-            } else {
-                TextUnavailableView(error: recoveryError) { confirmRecovery = true }
+                if expandedPane != .text {
+                    VStack(spacing: 0) {
+                        if isPDFSource { SourceViewerToolbar(controller: splitController) }
+                        PageView(sharedController: splitController, showsToolbar: false)
+                    }
+                    .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                    .background(ReaderTheme.canvas)
+                    .simultaneousGesture(
+                        TapGesture().onEnded { if expandedPane == .original { expandedPane = nil } }
+                    )
+                    .overlay(alignment: .topLeading) {
+                        expandButton(for: .original)
+                    }
+                }
+            }
+            .onChange(of: splitController.currentPage) { _, newPage in
+                if isPDFSource { syncPDFPage(newPage) }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
-                .strokeBorder(ReaderTheme.separator, lineWidth: 1)
-                .allowsHitTesting(false)
+    }
+
+    /// The text panel mirrors the PDF's page, whatever moved it there:
+    /// toolbar, arrow keys, a scroll that turns the PDF page, or speech
+    /// following. Programmatic follows are ignored so browsing never
+    /// detaches the live reader.
+    private func syncPDFPage(_ oneBased: Int) {
+        if splitController.lastProgrammaticPage == oneBased {
+            splitController.lastProgrammaticPage = nil
+            return
         }
-        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+        let zeroBased = max(0, oneBased - 1)
+        if model.viewer.browsedPage != zeroBased {
+            model.viewer.browsedPage = zeroBased
+            model.viewer.sourceFollows = false
+        }
+    }
+
+    @ViewBuilder private var textPane: some View {
+        if hasWords {
+            TextPanel()
+        } else {
+            TextUnavailableView(error: recoveryError) { confirmRecovery = true }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
+                        .strokeBorder(ReaderTheme.separator, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
+        }
     }
 
     /// Expand one pane to fill the workspace; tapping again returns to split view.
@@ -450,11 +448,7 @@ struct PlaceholderView: View {
             }
             .padding(32)
             .frame(maxWidth: 640, alignment: .leading)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: ReaderTheme.cardRadius)
-                    .strokeBorder(ReaderTheme.separator, lineWidth: 1)
-            }
+            .glassPanel(radius: ReaderTheme.cardRadius)
             .padding(24)
             .frame(maxWidth: .infinity, minHeight: 500)
         }
@@ -512,10 +506,7 @@ private struct EngineStatusView: View {
         }
         .padding(32)
         .frame(maxWidth: 490, alignment: .leading)
-        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius).strokeBorder(ReaderTheme.separator)
-        }
+        .glassPanel(radius: ReaderTheme.cardRadius)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -535,8 +526,7 @@ private struct DocumentLoadingView: View {
             }
             .padding(32)
             .frame(width: 290, height: 230, alignment: .topLeading)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.separator) }
+            .glassPanel(radius: 8)
             .accessibilityHidden(true)
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
@@ -617,8 +607,7 @@ private struct ReaderStatusStrip<Actions: View>: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(ReaderTheme.surface)
-        .overlay(alignment: .bottom) { Rectangle().fill(ReaderTheme.separator).frame(height: 1) }
+        .glassCard(radius: 8)
         .accessibilityElement(children: .contain)
     }
 }
@@ -683,7 +672,7 @@ private struct ReadingAppearancePopover: View {
         .padding(20)
         .frame(width: 310)
         .foregroundStyle(ReaderTheme.primaryText)
-        .background(ReaderTheme.raised)
+        .glassPanel(radius: 14)
     }
 }
 
@@ -713,7 +702,7 @@ private struct DocumentDetailsView: View {
         .padding(28)
         .frame(width: 440)
         .foregroundStyle(ReaderTheme.primaryText)
-        .background(ReaderTheme.surface)
+        .glassPanel(radius: 16)
     }
 
     private func detail(_ label: String, value: String) -> some View {
@@ -747,10 +736,10 @@ private struct ReaderSplitAutosave: NSViewRepresentable {
                    split.bounds.width > 0 {
                     guard configuredName != name else { return }
                     configuredName = name
-                    let key = "ReadAlong.readerSplit.v1.\(name)"
+                    let key = "ReadAlong.readerSplit.v2.\(name)"
                     let saved = UserDefaults.standard.object(forKey: "NSSplitView Subview Frames \(key)") != nil
                     split.autosaveName = NSSplitView.AutosaveName(key)
-                    if !saved { split.setPosition(split.bounds.width * 0.45, ofDividerAt: 0) }
+                    if !saved { split.setPosition(split.bounds.width * 0.30, ofDividerAt: 0) }
                     return
                 }
                 ancestor = view.superview

@@ -83,6 +83,7 @@ struct EditSheet: View {
             .padding(14)
         }
         .frame(minWidth: 620, minHeight: 460)
+        .glassPanel(radius: 16)
         .onAppear {
             page = min(max(0, model.displayPage), max(0, model.pageModel.pages.count - 1))
             load()

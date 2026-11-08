@@ -56,8 +56,13 @@ struct PlayerBar: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
-                .strokeBorder(contrast == .increased ? ReaderTheme.primaryText : ReaderTheme.separator,
-                              lineWidth: contrast == .increased ? 1.5 : 0.5)
+                .strokeBorder(contrast == .increased ? ReaderTheme.primaryText : ReaderTheme.glassBorder,
+                              lineWidth: contrast == .increased ? 1.5 : 1)
+                .allowsHitTesting(false)
+                .blendMode(.plusLighter)
+            RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
+                .strokeBorder(ReaderTheme.glassEdge, lineWidth: 1)
+                .padding(-0.5)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(contrast == .increased ? 0 : 0.07), radius: 12, y: 4)

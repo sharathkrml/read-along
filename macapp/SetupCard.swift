@@ -40,11 +40,7 @@ struct SetupCard: View {
             .padding(24)
             .foregroundStyle(ReaderTheme.primaryText)
             .frame(maxWidth: 560, alignment: .leading)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(contrast == .increased ? ReaderTheme.secondaryText : ReaderTheme.separator)
-            }
+            .glassPanel(radius: 16)
         }
     }
 

@@ -12,12 +12,47 @@ struct ReaderTextView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     var stage = false
+    /// When set, only lines on this page are shown; nil = all pages.
+    var page: Int? = nil
+    /// When true, returns just the NSTextView without its own NSScrollView
+    /// so an outer scroll view can own scrolling (single scroll bar mode).
+    var useOuterScroll = false
+    /// Callback when the coordinator wants to scroll to a vertical position
+    /// (used by unified scroll mode).
+    var onScrollTo: ((CGFloat) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(stage: stage, model: model)
+        Coordinator(stage: stage, model: model, page: page, onScrollTo: onScrollTo)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> NSView {
+        if useOuterScroll {
+            // Return just the text view; an outer scroll view owns scrolling.
+            // Start with a generous height so SwiftUI sizes it tall enough for scrolling.
+            let text = JumpTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 2000))
+            text.drawsBackground = false
+            text.isEditable = false
+            text.isSelectable = true
+            text.isRichText = true
+            text.importsGraphics = false
+            text.allowsUndo = false
+            text.usesFontPanel = false
+            text.usesFindBar = true
+            text.isIncrementalSearchingEnabled = true
+            text.usesInspectorBar = false
+            text.minSize = .zero
+            text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            text.isVerticallyResizable = true
+            text.isHorizontallyResizable = false
+            text.autoresizingMask = [.width, .height]
+            text.textContainer?.widthTracksTextView = true
+            text.textContainer?.lineFragmentPadding = 0
+            text.coordinatorOwner = context.coordinator
+            text.setAccessibilityLabel(stage ? "Focus reading text" : "Reading text")
+            context.coordinator.textView = text
+            return text
+        }
+
         let scrollView = ReaderScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
@@ -52,10 +87,22 @@ struct ReaderTextView: NSViewRepresentable {
         return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ nsView: NSView, context: Context) {
         let coordinator = context.coordinator
         coordinator.model = model
         coordinator.stage = stage
+        coordinator.page = page
+        coordinator.onScrollTo = onScrollTo
+        if useOuterScroll {
+            // Just update the text view in place; outer scroll view owns scrolling.
+            if let text = nsView as? JumpTextView {
+                coordinator.textView = text
+                let appearance = stage || colorScheme == .dark ? NSAppearance.Name.darkAqua : .aqua
+                coordinator.sync(appearance: "\(appearance.rawValue)|\(contrast)")
+            }
+            return
+        }
+        guard let scrollView = nsView as? NSScrollView else { return }
         let appearance = stage || colorScheme == .dark ? NSAppearance.Name.darkAqua : .aqua
         scrollView.appearance = NSAppearance(named: appearance)
         coordinator.sync(appearance: "\(appearance.rawValue)|\(contrast)")
@@ -66,6 +113,10 @@ struct ReaderTextView: NSViewRepresentable {
         weak var textView: JumpTextView?
         var model: ReaderModel?
         var stage: Bool
+        /// If set, only lines on this page are displayed.
+        var page: Int?
+        /// Callback for outer-scroll mode: reports the desired vertical scroll offset.
+        var onScrollTo: ((CGFloat) -> Void)?
         private var contentSignature = ""
         private var highlighted: HighlightState?
         private var followed = false
@@ -82,14 +133,16 @@ struct ReaderTextView: NSViewRepresentable {
             var spokenWord: Int?
         }
 
-        init(stage: Bool, model: ReaderModel?) {
+        init(stage: Bool, model: ReaderModel?, page: Int?, onScrollTo: ((CGFloat) -> Void)?) {
             self.stage = stage
             self.model = model
+            self.page = page
+            self.onScrollTo = onScrollTo
         }
 
         func sync(appearance: String) {
             guard let model, let view = textView else { return }
-            let content = ReaderContent(model: model, stage: stage, appearance: appearance)
+            let content = ReaderContent(model: model, stage: stage, appearance: appearance, page: page)
             view.readingMeasure = content.bodySize * (stage ? 29 : 34)
             view.stage = stage
             view.layoutReadingColumn()
@@ -195,45 +248,67 @@ struct ReaderTextView: NSViewRepresentable {
                            length: NSMaxRange(spans[end - 1].range) - spans[first].range.location)
         }
 
+        /// Scrolls the text view to center on a line. In outer-scroll mode, reports
+        /// the target offset via `onScrollTo` so the owning scroll view can move.
         private func scrollToCurrent(in view: JumpTextView) {
             guard view.selectedRange().length == 0, let model,
                   let range = characterRange(model.cursor..<(model.cursor + 1)),
-                  let manager = view.layoutManager, let container = view.textContainer,
-                  let scroll = view.enclosingScrollView else { return }
+                  let manager = view.layoutManager, let container = view.textContainer else { return }
             manager.ensureLayout(forCharacterRange: range)
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let line = manager.boundingRect(forGlyphRange: glyphs, in: container)
                 .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-            let visible = view.visibleRect
-            guard visible.height > 0 else { return }
-            let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
-            guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
-            let y = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
-            // Only input events detach following; this programmatic scroll cannot detach itself.
-            isProgrammaticScroll = true
-            scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: y))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            isProgrammaticScroll = false
+
+            let targetY: CGFloat
+            if let scroll = view.enclosingScrollView {
+                let visible = scroll.contentView.bounds
+                guard visible.height > 0 else { return }
+                let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
+                guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
+                targetY = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
+                isProgrammaticScroll = true
+                scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: targetY))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                isProgrammaticScroll = false
+            } else {
+                // Outer scroll mode: report target via callback.
+                let visible = view.bounds
+                guard visible.height > 0 else { return }
+                let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
+                guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
+                targetY = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
+                onScrollTo?(targetY)
+            }
         }
 
         private func scrollToWord(_ word: Int, in view: JumpTextView) {
             guard view.selectedRange().length == 0,
                   let range = characterRange(word..<(word + 1)),
-                  let manager = view.layoutManager, let container = view.textContainer,
-                  let scroll = view.enclosingScrollView else { return }
+                  let manager = view.layoutManager, let container = view.textContainer else { return }
             manager.ensureLayout(forCharacterRange: range)
             let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let line = manager.boundingRect(forGlyphRange: glyphs, in: container)
                 .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-            let visible = view.visibleRect
-            guard visible.height > 0 else { return }
-            let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
-            guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
-            let y = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
-            isProgrammaticScroll = true
-            scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: y))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            isProgrammaticScroll = false
+
+            let targetY: CGFloat
+            if let scroll = view.enclosingScrollView {
+                let visible = scroll.contentView.bounds
+                guard visible.height > 0 else { return }
+                let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
+                guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
+                targetY = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
+                isProgrammaticScroll = true
+                scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: targetY))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                isProgrammaticScroll = false
+            } else {
+                let visible = view.bounds
+                guard visible.height > 0 else { return }
+                let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
+                guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
+                targetY = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
+                onScrollTo?(targetY)
+            }
         }
 
         private func applyHighlight(_ next: HighlightState, in view: JumpTextView) {
@@ -310,11 +385,13 @@ extension ReaderTextView {
         var model: ReaderModel
         var stage: Bool
         var appearance: String
+        /// If set, only lines belonging to this page are rendered.
+        var page: Int? = nil
 
         var bodySize: CGFloat { stage ? min(44, max(32, model.prefs.size * 1.7)) : model.prefs.size }
 
         var renderKey: String {
-            "\(model.activeDoc?.id ?? "none")|\(model.contentRevision)|\(model.prefs.readingFont ?? "serif")|\(model.prefs.size)|\(model.prefs.appearance.rawValue)|\(appearance)|\(stage)|\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)"
+            "\(model.activeDoc?.id ?? "none")|\(model.contentRevision)|\(model.prefs.readingFont ?? "serif")|\(model.prefs.size)|\(model.prefs.appearance.rawValue)|\(appearance)|\(stage)|\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)|\(page ?? -1)"
         }
 
         func build() -> (NSAttributedString, [Span]) {
@@ -355,10 +432,19 @@ extension ReaderTextView {
                         .foregroundColor: kind == "label" || kind == "page" ? ReaderTheme.nsSecondaryText : ReaderTheme.nsPrimaryText]
             }
 
+            // When a page is set, only render lines belonging to that page so the
+            // left side shows just the text that lies under the current document page.
+            let lines: [Line]
+            if let page {
+                lines = model.pageModel.lines.filter { $0.page == page }
+            } else {
+                lines = model.pageModel.lines
+            }
+
             var lastBlock: Int?
             var lastKind: String?
             var lastPage = -1
-            for line in model.pageModel.lines {
+            for line in lines {
                 let kind = line.kind ?? "body"
                 let style = attributes(kind)
                 let changedPage = line.page != lastPage

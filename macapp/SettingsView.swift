@@ -79,26 +79,30 @@ struct SettingsView: View {
     private var readingSettings: some View {
         Group {
             Section("Text") {
-                Picker("Reading font", selection: Binding(
-                    get: { model.prefs.readingFont ?? "sans" },
-                    set: { model.prefs.readingFont = $0 }
-                )) {
-                    Text("SF Pro · Sans serif").tag("sans")
-                    Text("New York · Serif").tag("serif")
-                    Text("SF Mono · Monospaced").tag("mono")
-                }
-                LabeledContent("Text size") {
-                    HStack(spacing: 12) {
-                        Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
-                            .frame(maxWidth: 180)
-                        Text("\(Int(model.prefs.size)) pt")
-                            .monospacedDigit()
-                            .foregroundStyle(ReaderTheme.secondaryText)
-                            .frame(width: 44, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Reading font", selection: Binding(
+                        get: { model.prefs.readingFont ?? "sans" },
+                        set: { model.prefs.readingFont = $0 }
+                    )) {
+                        Text("SF Pro · Sans serif").tag("sans")
+                        Text("New York · Serif").tag("serif")
+                        Text("SF Mono · Monospaced").tag("mono")
                     }
+                    LabeledContent("Text size") {
+                        HStack(spacing: 12) {
+                            Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
+                                .frame(maxWidth: 180)
+                            Text("\(Int(model.prefs.size)) pt")
+                                .monospacedDigit()
+                                .foregroundStyle(ReaderTheme.secondaryText)
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                    }
+                    Toggle("Reading guide", isOn: $model.prefs.guide)
+                        .help("Emphasize the current phrase while keeping the rest of the text readable.")
                 }
-                Toggle("Reading guide", isOn: $model.prefs.guide)
-                    .help("Emphasize the current phrase while keeping the rest of the text readable.")
+                .padding(12)
+                .glassCard(radius: 12)
             }
             Section("Preview") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -114,39 +118,47 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 8)
             }
+            .padding(12)
+            .glassCard(radius: 12)
             Section {
                 Text("Follow me listens as you read aloud and moves the guide with your voice. Reading quietly never starts audio or the microphone.")
                     .font(.callout)
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
+            .padding(12)
+            .glassCard(radius: 12)
         }
     }
 
     private var voiceSettings: some View {
         Group {
             Section("Follow me") {
-                Picker("Input device", selection: Binding(
-                    get: { model.selectedMicID },
-                    set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }
-                )) {
-                    Text("System default").tag(Int?.none)
-                    ForEach(model.microphones.devices) { mic in
-                        Text(mic.name).tag(Int?.some(mic.id))
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Input device", selection: Binding(
+                        get: { model.selectedMicID },
+                        set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }
+                    )) {
+                        Text("System default").tag(Int?.none)
+                        ForEach(model.microphones.devices) { mic in
+                            Text(mic.name).tag(Int?.some(mic.id))
+                        }
+                        if let id = model.selectedMicID, model.selectedMicrophone == nil {
+                            Text("Saved microphone · unavailable").tag(Int?.some(id))
+                        }
                     }
-                    if let id = model.selectedMicID, model.selectedMicrophone == nil {
-                        Text("Saved microphone · unavailable").tag(Int?.some(id))
+                    if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
+                        Text("“\(name)” is unavailable. Reconnect it or choose another input device.")
+                            .font(.caption)
+                            .foregroundStyle(ReaderTheme.secondaryText)
                     }
-                }
-                if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
-                    Text("“\(name)” is unavailable. Reconnect it or choose another input device.")
+                    LabeledContent("Microphone access", value: permissionLabel)
+                    Text("English only. Access is requested when you explicitly start Follow me, never just by opening Settings.")
                         .font(.caption)
                         .foregroundStyle(ReaderTheme.secondaryText)
+                    Link("Microphone privacy settings…", destination: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
                 }
-                LabeledContent("Microphone access", value: permissionLabel)
-                Text("English only. Access is requested when you explicitly start Follow me, never just by opening Settings.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
-                Link("Microphone privacy settings…", destination: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                .padding(12)
+                .glassCard(radius: 12)
             }
         }
     }
@@ -154,31 +166,39 @@ struct SettingsView: View {
     private var appearanceSettings: some View {
         Group {
             Section("Appearance") {
-                Picker("Theme", selection: $model.prefs.appearance) {
-                    Text("System").tag(Appearance.system)
-                    Text("Light").tag(Appearance.light)
-                    Text("Dark").tag(Appearance.dark)
-                }
-                .pickerStyle(.segmented)
-                HStack(spacing: 12) {
-                    Image(systemName: "book.pages").font(.title2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Paper & Ink").font(.headline)
-                        Text("Quiet surfaces. A clear reading guide.")
-                            .font(.caption)
-                            .foregroundStyle(ReaderTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Theme", selection: $model.prefs.appearance) {
+                        Text("System").tag(Appearance.system)
+                        Text("Light").tag(Appearance.light)
+                        Text("Dark").tag(Appearance.dark)
                     }
+                    .pickerStyle(.segmented)
+                    HStack(spacing: 12) {
+                        Image(systemName: "book.pages").font(.title2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Paper & Ink").font(.headline)
+                            Text("Quiet surfaces. A clear reading guide.")
+                                .font(.caption)
+                                .foregroundStyle(ReaderTheme.secondaryText)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                 }
                 .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .glassCard(radius: 12)
             }
             Section("Feedback") {
-                Toggle("Interface sounds", isOn: $model.prefs.sound)
-                Toggle("Haptic feedback", isOn: $model.prefs.haptic)
-                Text("Haptics require supported hardware. Neither option is needed to follow your place.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Interface sounds", isOn: $model.prefs.sound)
+                    Toggle("Haptic feedback", isOn: $model.prefs.haptic)
+                    Text("Haptics require supported hardware. Neither option is needed to follow your place.")
+                        .font(.caption)
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                }
+                .padding(12)
+                .glassCard(radius: 12)
             }
         }
     }
@@ -186,20 +206,28 @@ struct SettingsView: View {
     private var processingSettings: some View {
         Group {
             Section("New documents") {
-                Picker("Text recovery", selection: $model.prefs.ocrMode) {
-                    Text("Auto · Recommended").tag("auto")
-                    Text("Printed · Fast").tag("fast")
-                    Text("Handwriting").tag("best")
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Text recovery", selection: $model.prefs.ocrMode) {
+                        Text("Auto · Recommended").tag("auto")
+                        Text("Printed · Fast").tag("fast")
+                        Text("Handwriting").tag("best")
+                    }
+                    Text("Auto uses Apple’s text reader for suitable printed pages and requests handwriting recognition only when needed. Printed is faster but less suitable for handwriting.")
+                        .font(.caption)
+                        .foregroundStyle(ReaderTheme.secondaryText)
                 }
-                Text("Auto uses Apple’s text reader for suitable printed pages and requests handwriting recognition only when needed. Printed is faster but less suitable for handwriting.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                .padding(12)
+                .glassCard(radius: 12)
             }
             Section("Optional models") {
-                Text("Text PDFs work without either model. Downloads are never started automatically.")
-                    .font(.callout)
-                    .foregroundStyle(ReaderTheme.secondaryText)
-                ModelCard(key: "ocr")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Text PDFs work without either model. Downloads are never started automatically.")
+                        .font(.callout)
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                    ModelCard(key: "ocr")
+                }
+                .padding(12)
+                .glassCard(radius: 12)
             }
         }
     }
@@ -207,21 +235,33 @@ struct SettingsView: View {
     private var aboutSettings: some View {
         Group {
             Section("Read Along") {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
-                LabeledContent("Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
+                    LabeledContent("Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")
+                }
+                .padding(12)
+                .glassCard(radius: 12)
             }
             Section("On this Mac") {
-                Label("Your documents and voice are processed locally.", systemImage: "lock.shield")
-                Text("No account is required. Imported documents are kept as managed copies; your original files are not changed. Optional model downloads contact their publishers. Installed macOS voices work offline.")
-                    .font(.callout)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Your documents and voice are processed locally.", systemImage: "lock.shield")
+                    Text("No account is required. Imported documents are kept as managed copies; your original files are not changed. Optional model downloads contact their publishers. Installed macOS voices work offline.")
+                        .font(.callout)
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                }
+                .padding(12)
+                .glassCard(radius: 12)
             }
             Section("Model licenses") {
-                Link("Voice following · CC BY 4.0 weights", destination: URL(string: "https://huggingface.co/FermionResearch/Phonon-2.5-English/blob/main/LICENSE-WEIGHTS-CC-BY-4.0.txt")!)
-                Link("Handwriting · LFM 1.0 license", destination: URL(string: "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
-                Text("Model identifiers, installation locations, and disk usage are in Processing & models → Advanced details.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 10) {
+                    Link("Voice following · CC BY 4.0 weights", destination: URL(string: "https://huggingface.co/FermionResearch/Phonon-2.5-English/blob/main/LICENSE-WEIGHTS-CC-BY-4.0.txt")!)
+                    Link("Handwriting · LFM 1.0 license", destination: URL(string: "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
+                    Text("Model identifiers, installation locations, and disk usage are in Processing & models → Advanced details.")
+                        .font(.caption)
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                }
+                .padding(12)
+                .glassCard(radius: 12)
             }
         }
     }

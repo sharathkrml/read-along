@@ -63,7 +63,7 @@ struct PageView: View {
                             .controlSize(.small)
                     }
                     .padding(8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .glassCard(radius: 8)
                     .padding(8)
                 }
         } else if let data = model.sourceData, !data.isEmpty {
@@ -139,7 +139,7 @@ struct SpacedPageView: View {
                 .aspectRatio(aspect, contentMode: .fit)
                 .overlay(
                     RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(.separator)
+                        .strokeBorder(ReaderTheme.glassBorder)
                 )
                 .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
             overlayCanvas

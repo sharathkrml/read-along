@@ -43,6 +43,9 @@ final class ReaderModel: ObservableObject {
     @Published var ready = false
     @Published var cursor = 0
     @Published var pageImage: NSImage?
+    /// Cache of page images for all pages, used by the unified document view
+    /// so scrolling can move through every page.
+    @Published var pageImages: [Int: NSImage] = [:]
     @Published var presentVisible = false
     var presentEnteredFullscreen = false
     @Published var showEdit = false
@@ -87,6 +90,8 @@ final class ReaderModel: ObservableObject {
     private let sourceCache = NSCache<NSString, NSData>()
     private var pageImageTask: Task<Void, Never>?
     private var pageImageKey = ""
+    private var pageImagesDocID = ""
+    private var pageImageGeneration = 0
     private var documentGeneration = 0
     private var pendingOpenID: String?
     private var openTask: Task<Void, Never>?
@@ -593,7 +598,14 @@ final class ReaderModel: ObservableObject {
         pageModel = payload
         modelRevision += 1
         contentRevision += 1
-        imageCache.removeAllObjects()
+        // Only a document switch invalidates the page-image cache; OCR updates
+        // to the same document must not blank pages that are already loaded.
+        let docID = payload.doc_id ?? library.active ?? ""
+        if docID != pageImagesDocID {
+            pageImagesDocID = docID
+            pageImages.removeAll()
+            pageImageGeneration += 1
+        }
         cursor = clamp(state.pos ?? cursor)
         loadPageImage(force: true)
         loadSource()
@@ -792,6 +804,39 @@ final class ReaderModel: ObservableObject {
 
     func refreshPageImage() async {
         loadPageImage(force: true)
+    }
+
+    /// Load an arbitrary page image into the pageImages cache (used by the unified
+    /// document view so all pages can be scrolled through).
+    func loadPageImage(_ page: Int) {
+        guard pageModel.pages.indices.contains(page) else { return }
+        guard pageImages[page] == nil else { return }
+        let docID = library.active ?? state.doc_id ?? "none"
+        let key = "\(docID)/\(page)/\(modelRevision)"
+        if let cached = imageCache.object(forKey: key as NSString) {
+            pageImages[page] = cached
+            contentRevision += 1 // Notify views that a page image is now available
+            return
+        }
+        let client = self.client
+        let generation = pageImageGeneration
+        Task { [weak self] in
+            // The page raster can be missing for a moment while a document is
+            // being rendered, so retry a few times before leaving the spinner.
+            for attempt in 0..<3 {
+                if let data = try? await client?.imageData("page/\(page)"),
+                   let image = NSImage(data: data) {
+                    self?.imageCache.setObject(image, forKey: key as NSString)
+                    await MainActor.run {
+                        guard self?.pageImageGeneration == generation else { return }
+                        self?.pageImages[page] = image
+                        self?.contentRevision += 1 // Notify views that a page image is now available
+                    }
+                    return
+                }
+                if attempt < 2 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+            }
+        }
     }
 
     // MARK: source

@@ -82,6 +82,7 @@ struct PresentView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .background(ReaderTheme.canvas)
+        .glassPanel(radius: 0)
         .onHover { hovering in pointerOverControls = hovering; revealControls() }
     }
 
@@ -135,8 +136,7 @@ struct PresentView: View {
         .foregroundStyle(ReaderTheme.primaryText)
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(ReaderTheme.raised, in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.separator) }
+        .glassPanel(radius: 16)
         .fixedSize(horizontal: false, vertical: true)
         .onHover { hovering in pointerOverControls = hovering; revealControls() }
     }

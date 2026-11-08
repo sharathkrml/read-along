@@ -29,6 +29,9 @@ struct SidebarView: View {
                         ForEach(matches) { doc in
                             SidebarRow(doc: doc)
                                 .tag(doc.id)
+                                .glassCard(radius: 8)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
                         }
                     }
                 }
@@ -85,7 +88,8 @@ struct SidebarView: View {
         .font(.callout)
         .padding(8)
         .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.separator))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.glassBorder))
+        .glassCard(radius: 8)
     }
 
     private var footer: some View {
@@ -115,6 +119,7 @@ struct SidebarView: View {
         }
         .padding(12)
         .background(ReaderTheme.canvas)
+        .glassCard(radius: 12)
     }
 
     private var downloadCount: Int {
@@ -291,7 +296,7 @@ struct RenameSheet: View {
         }
         .padding(24)
         .frame(width: 420)
-        .background(ReaderTheme.surface)
+        .glassPanel(radius: 16)
         .interactiveDismissDisabled(saving)
         .onAppear {
             guard !initialized else { return }

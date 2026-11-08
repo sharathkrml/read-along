@@ -23,6 +23,11 @@ final class PDFSourceController: ObservableObject {
     @Published var currentPage: Int = 1
     @Published var totalPages: Int = 1
     @Published var zoomPercent: Int = 100
+    /// Set when `followToPage` moved the PDF because the live reading
+    /// position advanced. The split view compares the next page change
+    /// against it to tell a programmatic follow apart from the user
+    /// turning the page themselves.
+    var lastProgrammaticPage: Int?
 
     func attach(_ v: PDFSourceViewer) {
         guard viewer !== v else { return }
@@ -34,9 +39,17 @@ final class PDFSourceController: ObservableObject {
     func sync() {
         guard let v = viewer, let doc = v.pdfView.document else { return }
         totalPages = max(1, doc.pageCount)
-        if let p = v.pdfView.currentPage {
-            let idx = doc.index(for: p)
-            currentPage = idx + 1
+        // Prefer the dominant visible page over pdfView.currentPage:
+        // in singlePageContinuous, scrolling the stacked pages does not
+        // reliably advance currentPage, so the text mirror would stay
+        // on page 1 while the user looks at page 2 or 3.
+        let visible = visiblePageIndex(v: v, doc: doc)
+        if let visible {
+            currentPage = visible + 1
+        } else if let p = v.pdfView.currentPage {
+            currentPage = doc.index(for: p) + 1
+        }
+        if let p = doc.page(at: max(0, currentPage - 1)) {
             // Report the zoom the user actually sees; PDFView.scaleFactor is not
             // always the on-screen point ratio while autoScales is active.
             let pageRect = p.bounds(for: .cropBox)
@@ -45,6 +58,25 @@ final class PDFSourceController: ObservableObject {
                 zoomPercent = max(1, Int((onScreen.width / pageRect.width * 100).rounded()))
             }
         }
+    }
+
+    /// Index of the page with the greatest vertical overlap with the
+    /// PDF view's viewport, or nil when nothing is laid out yet.
+    private func visiblePageIndex(v: PDFSourceViewer, doc: PDFDocument) -> Int? {
+        let viewport = v.pdfView.bounds
+        guard viewport.width > 1, viewport.height > 1, doc.pageCount > 0 else { return nil }
+        var best: Int?
+        var bestOverlap: CGFloat = 0
+        for i in 0..<doc.pageCount {
+            guard let page = doc.page(at: i) else { continue }
+            let rect = v.pdfView.convert(page.bounds(for: .cropBox), from: page)
+            let overlap = rect.intersection(viewport).height
+            if overlap > bestOverlap {
+                bestOverlap = overlap
+                best = i
+            }
+        }
+        return best
     }
 
     func goPrev() {
@@ -59,6 +91,7 @@ final class PDFSourceController: ObservableObject {
     }
     /// Browse to a page because the user asked; this detaches the pane from following.
     func goToPage(_ oneBased: Int) {
+        currentPage = max(1, min(oneBased, totalPages))
         followToPage(oneBased)
         onUserNavigate?(currentPage)
     }
@@ -66,8 +99,16 @@ final class PDFSourceController: ObservableObject {
     func followToPage(_ oneBased: Int) {
         guard let v = viewer, let doc = v.pdfView.document else { return }
         let idx = max(0, min(oneBased - 1, doc.pageCount - 1))
+        lastProgrammaticPage = idx + 1
         if let page = doc.page(at: idx) { v.pdfView.go(to: page) }
         sync()
+        // If the PDF view would not have changed, the split view never
+        // gets a page-change to consume the flag with; clear it shortly.
+        let target = idx + 1
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            if self?.lastProgrammaticPage == target { self?.lastProgrammaticPage = nil }
+        }
     }
     func zoomOut() {
         guard let v = viewer else { return }
@@ -144,6 +185,7 @@ final class PDFSourceViewer: NSView {
     private var highlightPage = -1
 
     private var clickMonitor: Any?
+    private var scrollObservers: [Any] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -162,12 +204,27 @@ final class PDFSourceViewer: NSView {
             }
             return event
         }
+        // PDFView scrolls through an internal NSScrollView, so layout()
+        // is not called while paging through stacked pages. Listen for
+        // scroll/bounds changes inside this viewer and refresh the
+        // controller's visible page, which the text panel mirrors.
+        for name in [Notification.Name("NSScrollViewDidScrollNotification"),
+                     NSView.boundsDidChangeNotification] {
+            scrollObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self,
+                      let view = note.object as? NSView,
+                      view.isDescendant(of: self) else { return }
+                MainActor.assumeIsolated { self.controller?.sync() }
+            })
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        for observer in scrollObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     override func layout() {
@@ -429,6 +486,6 @@ struct SourceViewerToolbar: View {
             .controlSize(.small)
         }
         .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .glassCard(radius: 8)
     }
 }

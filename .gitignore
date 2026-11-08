@@ -9,3 +9,4 @@ dist/
 macapp/AppIcon.png
 
 .DS_Store
+*.png
