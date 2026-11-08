@@ -20,6 +20,7 @@ struct PageView: View {
             panelHeader
             Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             content
+                .padding(.bottom, isPDF && hasSource ? 48 : 0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

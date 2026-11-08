@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// One compact control surface for reading: transport, state, and position.
+/// One compact control surface for reading: transport, state, position,
+/// and a live strip showing the phrase being heard or the next phrase to read.
 struct PlayerBar: View {
     /// Reserved height so scrollable panes never run under the dock.
-    static let measuredHeight: CGFloat = 78
+    static let measuredHeight: CGFloat = 106
 
     @EnvironmentObject private var model: ReaderModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -11,22 +12,11 @@ struct PlayerBar: View {
     @State private var scrubValue = 0.0
 
     var body: some View {
-        HStack(spacing: 13) {
-            transport
-            Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
-            status
-            Spacer(minLength: 10)
-            progress
-            if !positionContext.isEmpty {
-                Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
-                Text(positionContext)
-                    .font(ReaderTheme.numeral(10))
-                    .foregroundStyle(ReaderTheme.tertiaryText)
-                    .lineLimit(1)
-            }
+        VStack(spacing: 0) {
+            topRow
+            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+            liveRow
         }
-        .padding(.horizontal, 16)
-        .frame(height: 54)
         .foregroundStyle(ReaderTheme.primaryText)
         .background {
             RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous)
@@ -37,6 +27,7 @@ struct PlayerBar: View {
                 .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
                 .allowsHitTesting(false)
         }
+        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.dockRadius, style: .continuous))
         .shadow(color: .black.opacity(0.20), radius: 20, x: 0, y: 10)
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -53,6 +44,27 @@ struct PlayerBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Reading controls")
+    }
+
+    // MARK: - Transport
+
+    private var topRow: some View {
+        HStack(spacing: 13) {
+            transport
+            Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
+            status
+            Spacer(minLength: 10)
+            progress
+            if !positionContext.isEmpty {
+                Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
+                Text(positionContext)
+                    .font(ReaderTheme.numeral(10))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
     }
 
     private var transport: some View {
@@ -143,6 +155,138 @@ struct PlayerBar: View {
                 .accessibilityHidden(true)
         }
     }
+
+    // MARK: - Live strip
+
+    private var liveRow: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                if microphoneIsOn {
+                    Circle()
+                        .fill(ReaderTheme.accent)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: ReaderTheme.accent.opacity(0.7), radius: 3)
+                }
+                Text(liveLabel)
+                    .font(ReaderTheme.micro(9))
+                    .tracking(1.2)
+                    .foregroundStyle(microphoneIsOn ? ReaderTheme.accent : ReaderTheme.tertiaryText)
+                    .lineLimit(1)
+            }
+            .frame(width: 64, alignment: .leading)
+
+            Text(liveText)
+                .font(.system(size: 11.5))
+                .foregroundStyle(liveTextIsLive ? ReaderTheme.primaryText : ReaderTheme.secondaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentTransition(.opacity)
+                .animation(.easeOut(duration: 0.14), value: liveText)
+                .help(liveText)
+                .accessibilityLabel("\(liveLabel): \(liveText)")
+
+            Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 14)
+
+            microphoneMenu
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 33)
+    }
+
+    private var microphoneMenu: some View {
+        Menu {
+            Toggle("System default", isOn: Binding(
+                get: { model.selectedMicID == nil },
+                set: { on in if on { model.selectMic(nil) } }
+            ))
+            if !model.microphones.devices.isEmpty {
+                Divider()
+                ForEach(model.microphones.devices) { mic in
+                    Toggle(mic.name, isOn: Binding(
+                        get: { model.selectedMicID == mic.id },
+                        set: { on in if on { model.selectMic(mic) } }
+                    ))
+                }
+            }
+            if let id = model.selectedMicID, model.selectedMicrophone == nil {
+                Divider()
+                Button("Saved microphone unavailable") { }
+                    .disabled(true)
+            }
+            Divider()
+            Button("Refresh devices") {
+                Task { await model.refreshMicrophones() }
+            }
+            SettingsLink { Label("Microphone settings…", systemImage: "gearshape") }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: microphoneIsOn ? "mic.fill" : "mic")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(microphoneIsOn ? ReaderTheme.accent : ReaderTheme.tertiaryText)
+                Text(microphoneLabel)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(ReaderTheme.tertiaryText)
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: 176, minHeight: 22)
+            .background(ReaderTheme.canvas.opacity(0.55),
+                        in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+            }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch microphone")
+        .accessibilityLabel("Microphone, \(microphoneLabel)")
+    }
+
+    /// Menu items render a leading checkmark without changing the title.
+    private var microphoneLabel: String {
+        if let mic = model.selectedMicrophone { return mic.name }
+        if let saved = model.prefs.micName, !saved.isEmpty { return saved }
+        return "System default"
+    }
+
+    private var liveLabel: String {
+        if model.isComplete { return "DONE" }
+        return microphoneIsOn ? "LIVE" : "UP NEXT"
+    }
+
+    private var liveTextIsLive: Bool {
+        microphoneIsOn && !(model.state.partial ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var liveText: String {
+        if model.isComplete { return "You reached the end. Your place is saved." }
+        if microphoneIsOn {
+            let partial = (model.state.partial ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !partial.isEmpty { return partial }
+        }
+        if let phrase = currentPhrase { return phrase }
+        if let error = model.operationError, !error.isEmpty { return error }
+        return model.transportSubtitle
+    }
+
+    private var currentPhrase: String? {
+        guard let range = model.currentRange, !range.isEmpty else { return nil }
+        let words = model.pageModel.words
+        let lower = max(0, min(range.lowerBound, words.count))
+        let upper = max(lower, min(range.upperBound, words.count))
+        guard lower < upper else { return nil }
+        return words[lower..<upper].map(\.text).joined(separator: " ")
+    }
+
+    // MARK: - Derived state
 
     private var displayPercent: Int {
         Int(((isScrubbing ? scrubValue : progressFraction) * 100).rounded())

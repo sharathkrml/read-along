@@ -172,13 +172,15 @@ struct SettingsView: View {
                         Text("SF Mono").tag("mono")
                     }
                     .labelsHidden()
+                    .tint(ReaderTheme.secondaryText)
                     .frame(width: 186)
                 }
                 SettingsDivider()
                 SettingsRow("Text size") {
                     HStack(spacing: 10) {
-                        Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
+                        Slider(value: $model.prefs.size, in: 16...32, step: 1)
                             .frame(width: 130)
+                            .accessibilityLabel("Text size")
                         Text("\(Int(model.prefs.size)) pt")
                             .font(ReaderTheme.numeral(10.5))
                             .foregroundStyle(ReaderTheme.secondaryText)
@@ -236,6 +238,7 @@ struct SettingsView: View {
                     }
                 }
                 .labelsHidden()
+                .tint(ReaderTheme.secondaryText)
                 .frame(width: 220)
             }
             if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
@@ -318,6 +321,7 @@ struct SettingsView: View {
                     Text("Handwriting").tag("best")
                 }
                 .labelsHidden()
+                .tint(ReaderTheme.secondaryText)
                 .frame(maxWidth: 240, alignment: .leading)
             }
 

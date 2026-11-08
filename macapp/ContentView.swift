@@ -466,9 +466,9 @@ struct DetailView: View {
             HSplitView {
                 if model.expandedPane != .original {
                     textPane
-                        .frame(minWidth: 300,
-                               idealWidth: min(380, max(320, width * 0.34)),
-                               maxWidth: model.expandedPane == .text ? .infinity : 460,
+                        .frame(minWidth: 380,
+                               idealWidth: 420,
+                               maxWidth: model.expandedPane == .text ? .infinity : 560,
                                maxHeight: .infinity)
                         .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
                 }
@@ -476,7 +476,7 @@ struct DetailView: View {
                     VStack(spacing: 0) {
                         PageView(sharedController: splitController)
                     }
-                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 330, maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .padding(12)
@@ -889,8 +889,9 @@ private struct ReadingAppearancePopover: View {
                         .font(ReaderTheme.numeral(11))
                         .foregroundStyle(ReaderTheme.secondaryText)
                 }
-                Slider(value: $model.prefs.size, in: 16...32, step: 1) { Text("Text size") }
+                Slider(value: $model.prefs.size, in: 16...32, step: 1)
                     .tint(ReaderTheme.accent)
+                    .accessibilityLabel("Text size")
                     .accessibilityValue("\(Int(model.prefs.size)) points")
             }
             Toggle("Reading guide", isOn: $model.prefs.guide)

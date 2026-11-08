@@ -19,7 +19,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         if let action = item.action {
                             NSApp.sendAction(action, to: item.target, from: item)
                         }
-                        return
+                        break
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    let titles = NSApp.windows.map { "\($0.title)|\($0.className)" }
+                    try? titles.joined(separator: "\n").write(toFile: "/tmp/readalong-windows.txt", atomically: true, encoding: .utf8)
+                    for window in NSApp.windows where window.title.localizedCaseInsensitiveContains("settings") {
+                        window.makeKeyAndOrderFront(nil)
                     }
                 }
             }

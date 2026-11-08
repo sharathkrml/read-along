@@ -9,16 +9,16 @@ import SwiftUI
 enum ReaderTheme {
     // MARK: - Canvas
 
-    static let nsCanvas = adaptive("canvas", light: 0xF3F2ED, dark: 0x0A0A0C)
+    static let nsCanvas = adaptive("canvas", light: 0xEDEBE4, dark: 0x0A0A0C)
     static let canvas = Color(nsColor: nsCanvas)
 
     /// Sidebar rail, one step away from the canvas.
-    static let nsSidebar = adaptive("sidebar", light: 0xEDECE6, dark: 0x0D0D10)
+    static let nsSidebar = adaptive("sidebar", light: 0xE5E2DA, dark: 0x0D0D10)
     static let sidebar = Color(nsColor: nsSidebar)
 
     // MARK: - Panels
 
-    static let nsSurface = adaptive("surface", light: 0xFCFCFA, dark: 0x141417,
+    static let nsSurface = adaptive("surface", light: 0xFFFFFF, dark: 0x141417,
                                     contrastLight: 0xFFFFFF, contrastDark: 0x1A1A1E)
     static let surface = Color(nsColor: nsSurface)
 
@@ -27,8 +27,8 @@ enum ReaderTheme {
     static let raised = Color(nsColor: nsRaised)
 
     /// Selected row / pressed control fill.
-    static let nsSelection = adaptive("selection", light: 0xE7E5DE, dark: 0x202025,
-                                      contrastLight: 0xDDDBD3, contrastDark: 0x2A2A30)
+    static let nsSelection = adaptive("selection", light: 0xDDD9CF, dark: 0x202025,
+                                      contrastLight: 0xD2CDC0, contrastDark: 0x2A2A30)
     static let selection = Color(nsColor: nsSelection)
 
     // MARK: - Text
