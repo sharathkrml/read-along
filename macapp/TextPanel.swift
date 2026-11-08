@@ -28,20 +28,14 @@ struct TextPanel: View {
     }
 
     var body: some View {
+        // No card of its own: the split workspace provides the one shared
+        // surface, so text and original read as columns in a single box.
         VStack(spacing: 0) {
             header
             Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             bodyContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReaderTheme.surface,
-                    in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
-                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         .onChange(of: model.library.active) { _, _ in
             editing = false
             saving = false
@@ -55,47 +49,66 @@ struct TextPanel: View {
     }
 
     @ViewBuilder private var header: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(editing ? "EDITING" : "TEXT")
-                        .font(ReaderTheme.micro(9.5))
-                        .tracking(1.3)
-                        .foregroundStyle(editing ? ReaderTheme.accent : ReaderTheme.secondaryText)
-                    Text(editing ? "PAGE \(editPage + 1) OF \(total)" : "PAGE \(page + 1) OF \(total)")
-                        .font(ReaderTheme.numeral(9.5))
-                        .foregroundStyle(ReaderTheme.tertiaryText)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(editing ? ReaderTheme.warning : (model.viewer.textFollows ? ReaderTheme.success : ReaderTheme.warning))
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                        Text(editing ? "EDITING" : "TEXT")
+                            .font(ReaderTheme.micro(9.5))
+                            .tracking(1.3)
+                            .foregroundStyle(editing ? ReaderTheme.accent : ReaderTheme.secondaryText)
+                        Text(editing ? "PAGE \(editPage + 1) OF \(total)" : "PAGE \(page + 1) OF \(total)")
+                            .font(ReaderTheme.numeral(9.5))
+                            .foregroundStyle(ReaderTheme.tertiaryText)
+                    }
+                    Text(syncCaption)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(ReaderTheme.secondaryText)
                 }
-                Text(syncCaption)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(ReaderTheme.secondaryText)
-            }
-            Spacer(minLength: 6)
-            if !editing, isBrowsing || !model.viewer.textFollows {
-                Button { model.returnToReading() } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .frame(width: 26, height: 26)
+                Spacer(minLength: 6)
+                if !editing, isBrowsing || !model.viewer.textFollows {
+                    Button { model.returnToReading() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(StudioIconButtonStyle())
+                    .help("Return both panes to the live reading position")
+                    .accessibilityLabel("Return to reading")
                 }
-                .buttonStyle(StudioIconButtonStyle())
-                .help("Return both panes to the live reading position")
-                .accessibilityLabel("Return to reading")
+                if editing {
+                    if saving { ProgressView().controlSize(.small).frame(width: 28, height: 28) }
+                } else {
+                    Button {
+                        startEditing()
+                    } label: {
+                        Image(systemName: "pencil")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(StudioIconButtonStyle())
+                    .help("Edit this page’s text to fix OCR errors")
+                    .accessibilityLabel(pageLines.isEmpty ? "Add text for page \(page + 1)" : "Edit text for page \(page + 1)")
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             if editing {
-                if saving { ProgressView().controlSize(.small) }
+                Rectangle().fill(ReaderTheme.hairline).frame(height: 3)
             } else {
-                Button {
-                    startEditing()
-                } label: {
-                    Image(systemName: "pencil")
-                        .frame(width: 26, height: 26)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(ReaderTheme.hairline).frame(height: 3)
+                        Capsule().fill(ReaderTheme.accent)
+                            .frame(width: max(14, geo.size.width * min(1, max(0, model.progressPercent / 100))), height: 3)
+                    }
                 }
-                .buttonStyle(StudioIconButtonStyle())
-                .help("Edit this page’s text to fix OCR errors")
-                .accessibilityLabel(pageLines.isEmpty ? "Add text for page \(page + 1)" : "Edit text for page \(page + 1)")
+                .frame(height: 3)
+                .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
     @ViewBuilder private var bodyContent: some View {

@@ -112,41 +112,45 @@ final class PDFSourceController: ObservableObject {
     }
     func zoomOut() {
         guard let v = viewer else { return }
-        v.pdfView.autoScales = false
+        v.fitsWidth = false
         v.pdfView.scaleFactor = max(0.25, v.pdfView.scaleFactor / 1.2)
         v.needsLayout = true
         sync()
     }
     func zoomIn() {
         guard let v = viewer else { return }
-        v.pdfView.autoScales = false
+        v.fitsWidth = false
         v.pdfView.scaleFactor = min(4.0, v.pdfView.scaleFactor * 1.2)
         v.needsLayout = true
         sync()
     }
     func fitPage() {
         guard let v = viewer else { return }
-        v.pdfView.autoScales = true
+        v.fitsWidth = false
         v.pdfView.displayMode = .singlePageContinuous
+        if let page = v.pdfView.currentPage ?? v.pdfView.document?.page(at: 0) {
+            let pageRect = page.bounds(for: .cropBox)
+            guard pageRect.width > 0, pageRect.height > 0, v.bounds.width > 16, v.bounds.height > 16 else { sync(); return }
+            let fit = min((v.bounds.width - 16) / pageRect.width, (v.bounds.height - 16) / pageRect.height)
+            v.pdfView.scaleFactor = max(0.25, min(4, fit))
+        }
         v.needsLayout = true
         sync()
     }
     func fitWidth() {
         guard let v = viewer else { return }
-        v.pdfView.autoScales = false
+        v.fitsWidth = true
         v.pdfView.frame = v.bounds
-        if let page = v.pdfView.currentPage {
-            let pageRect = page.bounds(for: .cropBox)
-            let viewWidth = v.bounds.width - 2
-            if pageRect.width > 0 { v.pdfView.scaleFactor = max(0.25, min(4, viewWidth / pageRect.width)) }
-        }
+        v.needsLayout = true
+        v.applyFitWidth() // Snap to the width now, not after a resize settles.
         sync()
     }
     func actualSize() {
         guard let v = viewer else { return }
-        v.pdfView.autoScales = false
+        v.fitsWidth = false
         v.pdfView.frame = v.bounds
         v.pdfView.scaleFactor = 1.0
+        v.needsLayout = true
         sync()
     }
 }
@@ -184,16 +188,25 @@ final class PDFSourceViewer: NSView {
     private var highlightNext: [[Double]] = []
     private var highlightPage = -1
 
+    /// Whether the pane scale is owned by the fit-width rule. Zoom, fit-page
+    /// and actual size turn this off so a resize cannot yank the scale back.
+    var fitsWidth = true
+    private var pendingFit: DispatchWorkItem?
+
     private var clickMonitor: Any?
     private var scrollObservers: [Any] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        pdfView.autoScales = true
+        // Never let PDFView's autoScales race our fit-width scale: two owners
+        // produced the fullscreen zoom in/out flicker. We own scaleFactor.
+        pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
-        pdfView.displaysPageBreaks = false
+        pdfView.displaysPageBreaks = true
         pdfView.autoresizingMask = [.width, .height]
-        pdfView.backgroundColor = .clear
+        // Match the shared pane surface so the PDF column blends into the
+        // single-box workspace instead of reading as a separate dark slab.
+        pdfView.backgroundColor = ReaderTheme.nsSurface
         addSubview(pdfView)
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self, let window = self.window, event.window === window else { return event }
@@ -223,6 +236,7 @@ final class PDFSourceViewer: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
+        pendingFit?.cancel()
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         for observer in scrollObservers { NotificationCenter.default.removeObserver(observer) }
     }
@@ -230,25 +244,58 @@ final class PDFSourceViewer: NSView {
     override func layout() {
         super.layout()
         pdfView.frame = bounds
-        guard pdfView.autoScales,
+        // During a fullscreen toggle or window drag, bounds changes every
+        // frame. Debounce the scale instead of chasing each intermediate
+        // width — one final fit after the size settles, no swimming.
+        scheduleFitWidth()
+    }
+
+    /// Snap the scale to fit width immediately (explicit Fit-width tap).
+    func applyFitWidth() {
+        pendingFit?.cancel()
+        pendingFit = nil
+        guard fitsWidth,
               let page = pdfView.currentPage ?? pdfView.document?.page(at: 0) else { return }
         let pageRect = page.bounds(for: .cropBox)
-        guard pageRect.width > 0, pageRect.height > 0, bounds.width > 1, bounds.height > 1 else { return }
-        let fit = min((bounds.width - 2) / pageRect.width, (bounds.height - 2) / pageRect.height)
+        guard pageRect.width > 0, bounds.width > 16 else { return }
+        let fit = (bounds.width - 16) / pageRect.width
         guard fit > 0 else { return }
         if abs(pdfView.scaleFactor - fit) > 0.001 { pdfView.scaleFactor = fit }
-        controller?.sync()
+    }
+
+    private func scheduleFitWidth() {
+        pendingFit?.cancel()
+        guard fitsWidth,
+              let page = pdfView.currentPage ?? pdfView.document?.page(at: 0) else { return }
+        let pageRect = page.bounds(for: .cropBox)
+        guard pageRect.width > 0, bounds.width > 16 else { return }
+        let width = bounds.width
+        let job = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.fitsWidth, self.bounds.width == width,
+                  let page = self.pdfView.currentPage ?? self.pdfView.document?.page(at: 0) else { return }
+            let pageRect = page.bounds(for: .cropBox)
+            guard pageRect.width > 0 else { return }
+            let fit = (width - 16) / pageRect.width
+            if abs(self.pdfView.scaleFactor - fit) > 0.001 {
+                self.pdfView.scaleFactor = fit
+            }
+            // Scroll observers already track the visible page; syncing here
+            // as well would republish mid-animation and restart layouts.
+        }
+        pendingFit = job
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: job)
     }
 
     func load(url: URL) { pdfView.document = PDFDocument(url: url); fitPage() }
     func load(data: Data) { pdfView.document = PDFDocument(data: data); fitPage() }
 
     private func fitPage() {
-        pdfView.autoScales = true
+        fitsWidth = true
         pdfView.displayMode = .singlePageContinuous
         needsLayout = true
         layoutSubtreeIfNeeded()
-        controller?.sync()
+        scheduleFitWidth()
     }
 
     /// Draw the reading marker as PDF annotations so it scrolls and zooms with the page.
@@ -437,18 +484,18 @@ struct SourceViewerToolbar: View {
         HStack(spacing: 2) {
             Button { controller.goPrev() } label: {
                 Image(systemName: "chevron.left")
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .buttonStyle(StudioIconButtonStyle(size: 28))
             .disabled(controller.currentPage <= 1)
             .accessibilityLabel("Previous page")
             .help("Previous page")
 
             TextField("", text: $pageInput)
                 .textFieldStyle(.plain)
-                .font(ReaderTheme.numeral(10.5, weight: .medium))
+                .font(ReaderTheme.numeral(11, weight: .medium))
                 .multilineTextAlignment(.center)
-                .frame(width: 30, height: 20)
+                .frame(width: 38, height: 24)
                 .background(ReaderTheme.canvas,
                             in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                 .overlay {
@@ -468,42 +515,42 @@ struct SourceViewerToolbar: View {
                 .accessibilityLabel("Page number")
 
             Text("/ \(controller.totalPages)")
-                .font(ReaderTheme.numeral(10))
+                .font(ReaderTheme.numeral(11))
                 .foregroundStyle(ReaderTheme.tertiaryText)
                 .padding(.trailing, 4)
 
             Button { controller.goNext() } label: {
                 Image(systemName: "chevron.right")
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .buttonStyle(StudioIconButtonStyle(size: 28))
             .disabled(controller.currentPage >= controller.totalPages)
             .accessibilityLabel("Next page")
             .help("Next page")
 
             Rectangle().fill(ReaderTheme.hairlineStrong)
-                .frame(width: 1, height: 14)
-                .padding(.horizontal, 5)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 6)
 
             Button { controller.zoomOut() } label: {
                 Image(systemName: "minus")
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .buttonStyle(StudioIconButtonStyle(size: 28))
             .accessibilityLabel("Zoom out")
             .help("Zoom out")
 
             Text("\(controller.zoomPercent)%")
-                .font(ReaderTheme.numeral(10))
+                .font(ReaderTheme.numeral(11))
                 .foregroundStyle(ReaderTheme.secondaryText)
-                .frame(width: 38)
+                .frame(width: 44)
                 .accessibilityLabel("Zoom \(controller.zoomPercent) percent")
 
             Button { controller.zoomIn() } label: {
                 Image(systemName: "plus")
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(StudioIconButtonStyle(size: 24))
+            .buttonStyle(StudioIconButtonStyle(size: 28))
             .accessibilityLabel("Zoom in")
             .help("Zoom in")
 
@@ -513,22 +560,24 @@ struct SourceViewerToolbar: View {
                 Button("Actual size") { controller.actualSize() }
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 24)
+            .frame(width: 28)
             .help("Fit")
             .accessibilityLabel("Fit options")
         }
-        .padding(5)
-        .background(ReaderTheme.raised.opacity(0.97), in: Capsule(style: .continuous))
+        .padding(6)
+        // Floating glass: translucent + frosted so the page shows through
+        // while the controls stay legible.
+        .background(.thinMaterial, in: Capsule(style: .continuous))
         .overlay {
             Capsule(style: .continuous)
-                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                .strokeBorder(ReaderTheme.hairlineStrong, lineWidth: 1)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.24), radius: 14, y: 6)
+        .shadow(color: .black.opacity(0.28), radius: 16, y: 8)
     }
 }

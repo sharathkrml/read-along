@@ -143,7 +143,7 @@ struct ReaderTextView: NSViewRepresentable {
         func sync(appearance: String) {
             guard let model, let view = textView else { return }
             let content = ReaderContent(model: model, stage: stage, appearance: appearance, page: page)
-            view.readingMeasure = content.bodySize * (stage ? 29 : 34)
+            view.readingMeasure = content.bodySize * (stage ? 27 : 32)
             view.stage = stage
             view.layoutReadingColumn()
             let rebuilt = content.renderKey != contentSignature
@@ -413,23 +413,49 @@ extension ReaderTextView {
             func attributes(_ kind: String) -> [NSAttributedString.Key: Any] {
                 let size: CGFloat
                 switch kind {
-                case "title": size = min(stage ? 54 : 36, bodySize * 1.4)
-                case "label": size = bodySize * 0.80
-                case "row": size = bodySize * 0.94
+                case "title": size = min(stage ? 54 : 36, bodySize * 1.35)
+                case "label": size = bodySize * 0.78
+                case "row": size = bodySize * 0.95
                 case "page": size = max(11, bodySize * 0.65)
                 default: size = bodySize
                 }
                 let paragraph = NSMutableParagraphStyle()
-                paragraph.minimumLineHeight = size * (kind == "title" ? 1.25 : 1.5)
-                paragraph.paragraphSpacing = bodySize * (kind == "label" ? 0.25 : 0.55)
-                paragraph.paragraphSpacingBefore = kind == "title" ? bodySize * 0.35 : 0
-                if kind == "bullet" { paragraph.headIndent = bodySize * 0.9 }
-                if kind == "page" { paragraph.paragraphSpacing = bodySize * 0.45 }
+                switch kind {
+                case "title":
+                    paragraph.minimumLineHeight = size * 1.2
+                    paragraph.paragraphSpacing = bodySize * 0.30
+                    paragraph.paragraphSpacingBefore = bodySize * 0.70
+                case "label":
+                    paragraph.minimumLineHeight = size * 1.35
+                    paragraph.paragraphSpacing = bodySize * 0.25
+                    paragraph.paragraphSpacingBefore = bodySize * 0.55
+                case "bullet":
+                    paragraph.minimumLineHeight = size * 1.45
+                    paragraph.paragraphSpacing = bodySize * 0.25
+                    paragraph.firstLineHeadIndent = 0
+                    paragraph.headIndent = bodySize * 1.05
+                case "row":
+                    paragraph.minimumLineHeight = size * 1.45
+                    paragraph.paragraphSpacing = bodySize * 0.30
+                case "page":
+                    paragraph.minimumLineHeight = size * 1.4
+                    paragraph.paragraphSpacing = bodySize * 0.45
+                default:
+                    paragraph.minimumLineHeight = size * 1.5
+                    paragraph.paragraphSpacing = bodySize * 0.55
+                }
                 let font = kind == "label" || kind == "page"
-                    ? NSFont.systemFont(ofSize: size, weight: .medium)
+                    ? NSFont.systemFont(ofSize: size, weight: .semibold)
                     : readingFont(size, weight: kind == "title" ? .semibold : bodyWeight)
-                return [.font: font, .paragraphStyle: paragraph,
+                var attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph,
                         .foregroundColor: kind == "label" || kind == "page" ? ReaderTheme.nsSecondaryText : ReaderTheme.nsPrimaryText]
+                switch kind {
+                case "title": attrs[.kern] = NSNumber(value: -0.3)
+                case "label": attrs[.kern] = NSNumber(value: 0.6)
+                case "page": attrs[.kern] = NSNumber(value: 0.8)
+                default: break
+                }
+                return attrs
             }
 
             // When a page is set, only render lines belonging to that page so the
@@ -508,8 +534,8 @@ final class JumpTextView: NSTextView {
     }
 
     func layoutReadingColumn() {
-        let gutter: CGFloat = stage ? 32 : 24
-        let inset = NSSize(width: max(gutter, (bounds.width - readingMeasure) / 2), height: stage ? 24 : 28)
+        let gutter: CGFloat = stage ? 40 : 28
+        let inset = NSSize(width: max(gutter, (bounds.width - readingMeasure) / 2), height: stage ? 28 : 32)
         if textContainerInset != inset { textContainerInset = inset }
     }
 

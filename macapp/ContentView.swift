@@ -463,7 +463,9 @@ struct DetailView: View {
         } else if !hasDocument {
             PlaceholderView()
         } else {
-            // The PDF on the right owns the page; the text panel mirrors it.
+            // One seamless box: a single surface hosts both panes, divided
+            // only by the split divider. The PDF on the right owns the page;
+            // the text panel mirrors it.
             HSplitView {
                 if model.expandedPane != .original {
                     textPane
@@ -480,6 +482,14 @@ struct DetailView: View {
                     .frame(minWidth: 330, maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .background(ReaderTheme.surface,
+                        in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
+                    .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
             .padding(12)
             .onChange(of: splitController.currentPage) { _, newPage in
                 if isPDFSource { syncPDFPage(newPage) }
@@ -505,14 +515,6 @@ struct DetailView: View {
         } else {
             TextUnavailableView(error: recoveryError) { confirmRecovery = true }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(ReaderTheme.surface,
-                            in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
-                        .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
-                        .allowsHitTesting(false)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
         }
     }
 }

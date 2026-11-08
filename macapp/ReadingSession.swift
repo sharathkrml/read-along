@@ -27,7 +27,7 @@ struct ViewerState: Equatable {
     var browsedPage: Int? = nil
     var sourceFollows = true
     var textFollows = true
-    var zoomMode: ZoomMode = .fitPage
+    var zoomMode: ZoomMode = .fitWidth
     var customScale: Double = 1
 }
 
@@ -38,7 +38,7 @@ struct PageWordAnchor: Equatable {
 }
 
 struct DocumentViewPreferences: Codable {
-    var zoomMode: ZoomMode = .fitPage
+    var zoomMode: ZoomMode = .fitWidth
     var customScale: Double = 1
 }
 

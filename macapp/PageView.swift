@@ -16,28 +16,23 @@ struct PageView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            panelHeader
-            Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
-            content
-                .padding(.bottom, isPDF && hasSource ? 48 : 0)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReaderTheme.surface,
-                    in: RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous)
-                .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottom) {
+        // No card of its own (see TextPanel): one shared surface hosts both
+        // panes. The PDF toolbar floats on top as glass, rather than taking
+        // a dedicated footer strip.
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                panelHeader
+                Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             if isPDF, hasSource, showsToolbar {
                 SourceViewerToolbar(controller: controller)
                     .padding(.bottom, 14)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             controller.onUserNavigate = { page in
                 model.viewer.browsedPage = max(0, page - 1)
