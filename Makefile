@@ -45,9 +45,9 @@ dev:
 	@echo "Backend only (for UI iteration): .venv/bin/python readalong.py --port 8765"
 
 test:
-	.venv/bin/python test_align.py
-	.venv/bin/python test_library.py
-	.venv/bin/python test_speech_startup.py
+	.venv/bin/python -m tests.test_align
+	.venv/bin/python -m tests.test_library
+	.venv/bin/python -m tests.test_speech_startup
 	./scripts/test_native.sh
 
 icon:

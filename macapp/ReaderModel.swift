@@ -84,7 +84,13 @@ final class ReaderModel: ObservableObject {
     var activeDocument: Document? {
         library.documents.first(where: { $0.id == library.active })
     }
+    /// WebSocket URL the Swift capture layer streams microphone PCM to.
+    private var audioURL: URL? {
+        guard let port = state.audio_port, let host = client?.base.host else { return nil }
+        return URL(string: "ws://\(host):\(port)/audio")
+    }
     private var client: BackendClient?
+    private var audioCapture = AudioCapture()
     private var pollTask: Task<Void, Never>?
     private var modelRevision = 0
     private var toastTask: Task<Void, Never>?
@@ -723,6 +729,17 @@ final class ReaderModel: ObservableObject {
         Task {
             let ok = await self.requestMicrophoneAccessIfNeeded()
             guard ok else { return }
+            // Start Swift-side microphone capture (Python never touches the mic,
+            // so TCC attributes microphone access to Read Along).
+            if let audioURL {
+                do {
+                    try await audioCapture.start(to: audioURL)
+                } catch {
+                    transportState = .failed
+                    showToast("Could not start microphone capture: \(error.localizedDescription)", isError: true)
+                    return
+                }
+            }
             transportState = .preparing
             do {
                 try await client?.startFollow()
@@ -738,6 +755,7 @@ final class ReaderModel: ObservableObject {
         let c = client
         transportState = .idle
         Task {
+            audioCapture.stop()
             do { try await c?.stopFollow(); feedback(.navigation) } catch {}
         }
     }

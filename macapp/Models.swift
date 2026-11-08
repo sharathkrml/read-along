@@ -127,6 +127,7 @@ struct ReaderState: Decodable, Equatable {
     var model_pages: Int? = nil
     var speech_ready: Bool? = nil
     var ocr_ready: Bool? = nil
+    var audio_port: Int? = nil
     var pos: Int? = nil
     var total: Int? = nil
     var page: Int? = nil
