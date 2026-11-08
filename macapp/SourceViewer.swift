@@ -2,6 +2,23 @@ import SwiftUI
 import AppKit
 import PDFKit
 
+/// Common contract for the PDF and image source viewers so the same toolbar
+/// (zoom, fit, page navigation) can drive either one.
+@MainActor
+protocol SourceControlling: ObservableObject {
+    var currentPage: Int { get }
+    var totalPages: Int { get }
+    var zoomPercent: Int { get }
+    func goPrev()
+    func goNext()
+    func goToPage(_ oneBased: Int)
+    func zoomOut()
+    func zoomIn()
+    func fitPage()
+    func fitWidth()
+    func actualSize()
+}
+
 struct SourceViewerTransform: Equatable {
     var scale: CGFloat = 1
     var origin: CGPoint = .zero
@@ -17,7 +34,7 @@ struct SourceViewerTransform: Equatable {
 }
 
 @MainActor
-final class PDFSourceController: ObservableObject {
+final class PDFSourceController: ObservableObject, SourceControlling {
     weak var viewer: PDFSourceViewer?
     var onUserNavigate: ((Int) -> Void)?
     @Published var currentPage: Int = 1
@@ -343,6 +360,10 @@ final class OverlayImageView: NSImageView {
     var currentBoxes: [[Double]] = []
     var nextBoxes: [[Double]] = []
 
+    // Flipped so the scroll view's origin is the top-left: a photo reads
+    // top-down and scroll-to-zero lands at the top instead of the bottom.
+    override var isFlipped: Bool { true }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let image, image.size.width > 0, image.size.height > 0 else { return }
@@ -354,8 +375,8 @@ final class OverlayImageView: NSImageView {
             for b in boxes {
                 let rect = CGRect(
                     x: b[0] * size.width,
-                    // Normalized boxes are top-left origin; AppKit draws bottom-left.
-                    y: (1 - b[1] - b[3]) * size.height,
+                    // Normalized boxes are top-left origin; the view is flipped.
+                    y: b[1] * size.height,
                     width: max(1, b[2] * size.width),
                     height: max(1, b[3] * size.height)
                 ).insetBy(dx: -2, dy: -2)
@@ -372,6 +393,8 @@ final class OverlayImageView: NSImageView {
 
 final class ImageSourceViewer: NSView {
     var transform = SourceViewerTransform()
+    var controller: ImageSourceController?
+    var loadedDataHash: Int?
     let scrollView = NSScrollView()
     let imageView = OverlayImageView()
     override init(frame: NSRect) {
@@ -386,6 +409,17 @@ final class ImageSourceViewer: NSView {
         imageView.imageScaling = .scaleNone
         scrollView.documentView = imageView
         addSubview(scrollView)
+        // Keep the toolbar's zoom percentage in sync after a pinch/scroll-wheel zoom.
+        for name in [NSScrollView.didEndLiveMagnifyNotification] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(imageMagnificationChanged),
+                name: name, object: scrollView
+            )
+        }
+    }
+
+    @objc private func imageMagnificationChanged() {
+        controller?.sync()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -406,8 +440,9 @@ final class ImageSourceViewer: NSView {
               image.size.width > 0, image.size.height > 0 else { return }
         let available = scrollView.bounds.size
         guard available.width > 1, available.height > 1 else { return }
-        let fit = min((available.width - 2) / image.size.width,
-                      (available.height - 2) / image.size.height)
+        // Default to full width so a tall photo reads like the PDF column
+        // instead of being shrunk to fit the whole pane.
+        let fit = (available.width - 2) / image.size.width
         scrollView.magnification = max(0.05, min(4, fit))
         scrollView.contentView.scroll(to: .zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -430,6 +465,70 @@ final class ImageSourceViewer: NSView {
         imageView.currentBoxes = current
         imageView.nextBoxes = next
         imageView.needsDisplay = true
+    }
+}
+
+@MainActor
+final class ImageSourceController: ObservableObject, SourceControlling {
+    weak var viewer: ImageSourceViewer?
+    @Published var currentPage: Int = 1
+    @Published var totalPages: Int = 1
+    @Published var zoomPercent: Int = 100
+    var onUserNavigate: ((Int) -> Void)?
+
+    func attach(_ v: ImageSourceViewer) {
+        guard viewer !== v else { return }
+        viewer = v
+        v.controller = self
+        sync()
+    }
+
+    func sync() {
+        guard let v = viewer, let image = v.imageView.image, image.size.width > 0 else { return }
+        let mag = v.scrollView.magnification
+        zoomPercent = max(1, Int((mag * 100).rounded()))
+    }
+
+    func goPrev() {}
+    func goNext() {}
+    func goToPage(_ oneBased: Int) {}
+    func followToPage(_ oneBased: Int) {}
+
+    func zoomOut() {
+        guard let v = viewer else { return }
+        v.scrollView.magnification = max(v.scrollView.minMagnification, v.scrollView.magnification / 1.2)
+        sync()
+    }
+    func zoomIn() {
+        guard let v = viewer else { return }
+        v.scrollView.magnification = min(v.scrollView.maxMagnification, v.scrollView.magnification * 1.2)
+        v.needsLayout = true
+        v.layoutSubtreeIfNeeded()
+        sync()
+    }
+    func fitPage() {
+        guard let v = viewer, let image = v.imageView.image, image.size.width > 0 else { return }
+        let available = v.scrollView.bounds.size
+        guard available.width > 1, available.height > 1 else { return }
+        let fit = min((available.width - 2) / image.size.width,
+                      (available.height - 2) / image.size.height)
+        v.scrollView.magnification = max(v.scrollView.minMagnification, min(v.scrollView.maxMagnification, fit))
+        v.scrollView.contentView.scroll(to: .zero)
+        v.scrollView.reflectScrolledClipView(v.scrollView.contentView)
+        sync()
+    }
+    func fitWidth() {
+        guard let v = viewer, let image = v.imageView.image, image.size.width > 0 else { return }
+        let available = v.scrollView.bounds.size
+        guard available.width > 1 else { return }
+        let fit = (available.width - 2) / image.size.width
+        v.scrollView.magnification = max(v.scrollView.minMagnification, min(v.scrollView.maxMagnification, fit))
+        sync()
+    }
+    func actualSize() {
+        guard let v = viewer else { return }
+        v.scrollView.magnification = 1.0
+        sync()
     }
 }
 
@@ -461,23 +560,35 @@ struct PDFSourceRepresentable: NSViewRepresentable {
 }
 
 struct ImageSourceRepresentable: NSViewRepresentable {
-    let image: NSImage
+    let data: Data
+    @ObservedObject var controller: ImageSourceController
     var currentBoxes: [[Double]] = []
     var nextBoxes: [[Double]] = []
+
     func makeNSView(context: Context) -> ImageSourceViewer {
         let v = ImageSourceViewer(frame: .zero)
-        v.setImage(image)
+        if let image = NSImage(data: data) {
+            v.setImage(image)
+            v.loadedDataHash = data.hashValue
+        }
         v.setHighlights(current: currentBoxes, next: nextBoxes)
+        controller.attach(v)
         return v
     }
+
     func updateNSView(_ nsView: ImageSourceViewer, context: Context) {
-        if nsView.imageView.image !== image { nsView.setImage(image) }
+        // Rebuilding NSImage every render reset scroll; only do it for new bytes.
+        if nsView.loadedDataHash != data.hashValue, let image = NSImage(data: data) {
+            nsView.setImage(image)
+            nsView.loadedDataHash = data.hashValue
+        }
         nsView.setHighlights(current: currentBoxes, next: nextBoxes)
+        controller.attach(nsView)
     }
 }
 
-struct SourceViewerToolbar: View {
-    @ObservedObject var controller: PDFSourceController
+struct SourceViewerToolbar<C: SourceControlling>: View {
+    @ObservedObject var controller: C
     @State private var pageInput: String = ""
 
     var body: some View {

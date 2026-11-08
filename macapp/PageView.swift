@@ -4,6 +4,7 @@ import SwiftUI
 struct PageView: View {
     @EnvironmentObject private var model: ReaderModel
     @StateObject private var sourceController = PDFSourceController()
+    @StateObject private var imageSourceController = ImageSourceController()
     /// In Split the toolbar is docked above both panes, so the PDF pane shares
     /// the controller owned by ContentView instead of the toolbar row below.
     var sharedController: PDFSourceController?
@@ -27,23 +28,32 @@ struct PageView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if isPDF, hasSource, showsToolbar {
-                SourceViewerToolbar(controller: controller)
-                    .padding(.bottom, 14)
+            if hasSource, showsToolbar {
+                if isPDF {
+                    SourceViewerToolbar(controller: controller)
+                        .padding(.bottom, 14)
+                } else {
+                    SourceViewerToolbar(controller: imageSourceController)
+                        .padding(.bottom, 14)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            controller.onUserNavigate = { page in
-                model.viewer.browsedPage = max(0, page - 1)
-                model.viewer.sourceFollows = false
+            if isPDF {
+                controller.onUserNavigate = { page in
+                    model.viewer.browsedPage = max(0, page - 1)
+                    model.viewer.sourceFollows = false
+                }
+            } else {
+                imageSourceController.onUserNavigate = { _ in }
             }
         }
         .onChange(of: model.displayPage) { _, page in
-            if model.viewer.sourceFollows { controller.followToPage(page + 1) }
+            if isPDF, model.viewer.sourceFollows { controller.followToPage(page + 1) }
         }
         .onChange(of: model.viewer.sourceFollows) { _, follows in
-            if follows { controller.followToPage(model.displayPage + 1) }
+            if isPDF, follows { controller.followToPage(model.displayPage + 1) }
         }
     }
 
@@ -118,8 +128,8 @@ struct PageView: View {
                     nextBoxes: nextBoxes
                 )
                 .id(model.library.active)
-            } else if let image = NSImage(data: data) {
-                ImageSourceRepresentable(image: image, currentBoxes: currentBoxes, nextBoxes: nextBoxes)
+            } else if NSImage(data: data) != nil {
+                ImageSourceRepresentable(data: data, controller: imageSourceController, currentBoxes: currentBoxes, nextBoxes: nextBoxes)
                     .id(model.library.active)
             } else {
                 rasterFallback
