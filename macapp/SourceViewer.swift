@@ -570,9 +570,11 @@ struct SourceViewerToolbar: View {
             .accessibilityLabel("Fit options")
         }
         .padding(6)
-        // Floating glass: translucent + frosted so the page shows through
-        // while the controls stay legible.
-        .background(.thinMaterial, in: Capsule(style: .continuous))
+        // Opaque, theme-aware surface instead of a material: a material adapts
+        // to whatever is behind it (here a white PDF page), which washes out
+        // the toolbar and its buttons in dark mode. A solid raised surface keeps
+        // contrast stable regardless of the page color.
+        .background(ReaderTheme.raised, in: Capsule(style: .continuous))
         .overlay {
             Capsule(style: .continuous)
                 .strokeBorder(ReaderTheme.hairlineStrong, lineWidth: 1)

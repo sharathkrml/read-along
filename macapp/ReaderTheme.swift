@@ -294,14 +294,33 @@ struct StudioIconButtonStyle: ButtonStyle {
     var size: CGFloat = 28
 
     func makeBody(configuration: Configuration) -> some View {
+        StudioIconButtonBody(configuration: configuration, enabled: enabled, size: size)
+    }
+}
+
+private struct StudioIconButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let enabled: Bool
+    let size: CGFloat
+    @State private var hovered = false
+
+    var body: some View {
         configuration.label
             .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(enabled ? ReaderTheme.secondaryText : ReaderTheme.tertiaryText.opacity(0.6))
             .frame(width: size, height: size)
             .background {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(configuration.isPressed ? ReaderTheme.selection : Color.clear)
+                    .fill(fill)
             }
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onHover { if enabled { hovered = $0 } }
+    }
+
+    private var fill: Color {
+        if !enabled { return Color.clear }
+        if configuration.isPressed { return ReaderTheme.selection }
+        if hovered { return ReaderTheme.selection.opacity(0.55) }
+        return Color.clear
     }
 }
