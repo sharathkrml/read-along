@@ -25,7 +25,6 @@ struct ContentView: View {
         .onAppear {
             #if DEBUG
             ReaderTheme.validateContrast()
-            ReaderShellLayout.validate()
             #endif
         }
         .sheet(isPresented: $model.showEdit) {
@@ -108,7 +107,8 @@ struct DetailView: View {
     @State private var showAppearance = false
     @State private var showDetails = false
     @State private var confirmRecovery = false
-    @State private var lastFocusedPane: ViewPane = .text
+    /// Which pane is expanded to fill the workspace; `nil` = split view.
+    @State private var expandedPane: ViewPane? = nil
     // Owns the PDF toolbar docked above the split view so it and the PDF pane
     // track the same document.
     @StateObject private var splitController = PDFSourceController()
@@ -118,6 +118,11 @@ struct DetailView: View {
             notices
             GeometryReader { geometry in
                 workspace(width: geometry.size.width)
+                    // NSViewRepresentable (NSScrollView) children don't always
+                    // participate in SwiftUI safe-area layout, so clamp the
+                    // workspace height explicitly to keep scrollable panes clear
+                    // of the bottom player bar.
+                    .frame(maxHeight: geometry.size.height - bottomInsetHeight)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,9 +160,6 @@ struct DetailView: View {
         } message: {
             Text("This applies to the whole document and may replace text corrections. Your original file stays unchanged.")
         }
-        .onChange(of: model.prefs.pane) { _, pane in
-            if pane != .split { lastFocusedPane = pane }
-        }
     }
 
     private var hasWords: Bool { !model.pageModel.words.isEmpty }
@@ -165,10 +167,13 @@ struct DetailView: View {
         guard let data = model.sourceData, !data.isEmpty else { return false }
         return data.prefix(4) == Data("%PDF".utf8)
     }
-    /// More than one page worth of text exists to browse.
-    private var hasPageNav: Bool { model.pageModel.pages.count > 1 }
     private var hasDocument: Bool {
         model.activeDoc != nil || model.hasSource || model.documentLoadingMessage != nil
+    }
+    /// Height to subtract from the workspace so scrollable panes never extend
+    /// underneath the bottom player bar.
+    private var bottomInsetHeight: CGFloat {
+        model.canRead && model.documentLoadingMessage == nil ? PlayerBar.measuredHeight : 0
     }
     private var title: String { model.activeDoc?.title ?? "Read Along" }
 
@@ -204,9 +209,7 @@ struct DetailView: View {
         }
         if model.isProcessing, model.documentLoadingMessage == nil {
             ReaderStatusStrip(symbol: "", title: "Recovering document text", detail: model.processingCopy, busy: true) {
-                if model.hasSource, model.prefs.pane == .text {
-                    Button("View original") { model.prefs.pane = .original }
-                }
+                EmptyView()
             }
         } else if hasWords, recoveryError != nil {
             ReaderStatusStrip(symbol: "exclamationmark.triangle", title: "Some text couldn’t be recovered",
@@ -230,56 +233,39 @@ struct DetailView: View {
         } else if !hasDocument {
             PlaceholderView()
         } else {
-            let pane = ReaderShellLayout.effectivePane(model.prefs.pane, width: width, lastPane: lastFocusedPane)
             VStack(spacing: 0) {
-                if model.prefs.pane == .split, pane != .split {
-                    compactSplitNotice
-                }
-                switch pane {
-                case .text:
-                    VStack(spacing: 0) {
-                        if hasPageNav { TextPageNavToolbar() }
+                if isPDFSource { SourceViewerToolbar(controller: splitController) }
+                HSplitView {
+                    if expandedPane != .original {
                         textPane
+                            .frame(minWidth: 280, idealWidth: width * 0.45, maxWidth: .infinity,
+                                   maxHeight: .infinity)
+                            .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
+                            .simultaneousGesture(
+                                TapGesture().onEnded { if expandedPane == .text { expandedPane = nil } }
+                            )
+                            .overlay(alignment: .topTrailing) {
+                                expandButton(for: .text)
+                            }
                     }
-                    .frame(maxWidth: ReaderTheme.readingWidth + 88)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, width < 700 ? 16 : ReaderTheme.gutter)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                case .original:
-                    PageView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .split:
-                    VStack(spacing: 0) {
-                        if isPDFSource { SourceViewerToolbar(controller: splitController) }
-                        HSplitView {
-                            textPane(showsPageNav: hasPageNav)
-                                .frame(minWidth: 280, idealWidth: width * 0.45, maxWidth: .infinity,
-                                       maxHeight: .infinity)
-                                .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
-                                .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .text })
-                            PageView(sharedController: splitController, showsToolbar: false)
-                                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-                                .simultaneousGesture(TapGesture().onEnded { lastFocusedPane = .original })
-                        }
+                    if expandedPane != .text {
+                        PageView(sharedController: splitController, showsToolbar: false)
+                            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                            .simultaneousGesture(
+                                TapGesture().onEnded { if expandedPane == .original { expandedPane = nil } }
+                            )
+                            .overlay(alignment: .topLeading) {
+                                expandButton(for: .original)
+                            }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var textPane: some View { textPane(showsPageNav: false) }
-
-    private func textPane(showsPageNav: Bool) -> some View {
-        VStack(spacing: 0) {
-            if showsPageNav {
-                TextPageNavToolbar()
-                    .padding(.bottom, 6)
-            }
-            cardPane
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var textPane: some View {
+        cardPane
     }
 
     private var cardPane: some View {
@@ -293,6 +279,7 @@ struct DetailView: View {
                             Label("Return to reading", systemImage: "arrow.uturn.backward")
                         }
                         .controlSize(.small)
+                        .buttonStyle(.borderless)
                         .help("Return to the live reading position without stopping playback")
                         Spacer(minLength: 0)
                     }
@@ -317,51 +304,41 @@ struct DetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.cardRadius))
     }
 
-    private var compactSplitNotice: some View {
-        HStack(spacing: 10) {
-            Label("Widen the window for Split.", systemImage: "rectangle.split.2x1")
-                .foregroundStyle(ReaderTheme.secondaryText)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            Picker("Pane to show while Split is compact", selection: $lastFocusedPane) {
-                Text("Text").tag(ViewPane.text)
-                Text("Original").tag(ViewPane.original)
+    /// Expand one pane to fill the workspace; tapping again returns to split view.
+    @ViewBuilder private func expandButton(for pane: ViewPane) -> some View {
+        let isExpanded = expandedPane == pane
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedPane = isExpanded ? nil : pane
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 146)
+        } label: {
+            Image(systemName: isExpanded ? "arrow.backward" : "arrow.left.and.right")
+                .imageScale(.small)
         }
-        .font(.callout)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(ReaderTheme.surface)
+        .controlSize(.small)
+        .buttonStyle(.plain)
+        .padding(7)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .padding(6)
+        .help(isExpanded ? "Return to split view" : "Expand \(pane == .text ? "text" : "original")")
     }
 
     @ToolbarContentBuilder private func toolbar() -> some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            Picker("Document view", selection: $model.prefs.pane) {
-                ForEach(ViewPane.allCases, id: \.self) { pane in
-                    Text(pane.label).tag(pane)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 210)
-            .disabled(!hasDocument || model.presentVisible)
-            .help("Text (⌘1), Original (⌘2), or Split (⌘3)")
-            .accessibilityLabel("Document view")
-        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.findInDocument() } label: {
                 Label("Find", systemImage: "magnifyingglass")
             }
             .labelStyle(.iconOnly)
+            .controlSize(.small)
+            .buttonStyle(.borderless)
             .disabled(!hasWords || model.presentVisible)
             .help("Find in document (⌘F)")
 
             Button { showAppearance.toggle() } label: {
                 Text("Aa").font(.system(size: 15, weight: .medium, design: .serif))
             }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
             .accessibilityLabel("Reading appearance")
             .help("Reading appearance")
             .popover(isPresented: $showAppearance, arrowEdge: .bottom) {
@@ -371,6 +348,8 @@ struct DetailView: View {
             Button { model.enterPresent() } label: {
                 Label("Focus", systemImage: "arrow.up.left.and.arrow.down.right")
             }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
             .disabled(!hasWords || model.presentVisible)
             .help("Focus (⇧⌘F)")
 
@@ -406,22 +385,13 @@ struct DetailView: View {
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
+            .labelStyle(.iconOnly)
+            .controlSize(.small)
+            .buttonStyle(.borderless)
             .help("More document actions")
             .accessibilityLabel("More document actions")
         }
     }
-}
-
-extension ViewPane {
-    var icon: String {
-        switch self {
-        case .text: return "text.alignleft"
-        case .original: return "doc.richtext"
-        case .split: return "rectangle.split.2x1"
-        }
-    }
-
-    var label: String { rawValue.capitalized }
 }
 
 /// Welcome is useful without installing either optional recognition model.
@@ -458,12 +428,12 @@ struct PlaceholderView: View {
                             Label("Import a document…", systemImage: "plus")
                         }
                         .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .controlSize(.regular)
                         .focused($importFocused)
                         .help("Choose a PDF, JPEG, or PNG (⌘O)")
                         Button("Try a sample") { Task { await model.importSample() } }
                             .buttonStyle(.bordered)
-                            .controlSize(.large)
+                            .controlSize(.regular)
                     }
                     Text("PDF, JPEG, or PNG · Up to 25 MB")
                         .font(.caption)
@@ -471,10 +441,8 @@ struct PlaceholderView: View {
                 }
                 Divider().overlay(ReaderTheme.separator)
                 HStack(alignment: .top, spacing: 24) {
-                    welcomeMode("Read to me", symbol: "speaker.wave.2",
-                                detail: "Listen with an installed Mac voice. No model download needed.")
                     welcomeMode("Follow me", symbol: "mic",
-                                detail: "Read aloud at your own pace. Optional voice-following setup when you need it.")
+                                detail: "Read aloud at your own pace. The reading guide follows your voice.")
                 }
                 Label("Processed on this Mac. No account required.", systemImage: "lock.shield")
                     .font(.caption)
@@ -531,6 +499,7 @@ private struct EngineStatusView: View {
             if let error {
                 Button("Retry connection") { model.retryConnection() }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 DisclosureGroup("Details") {
                     Text(error).font(.callout).textSelection(.enabled).padding(.top, 8)
                 }
@@ -606,17 +575,16 @@ private struct TextUnavailableView: View {
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            if model.hasSource {
-                Button("View original") { model.prefs.pane = .original }
-                    .buttonStyle(.borderedProminent)
-            } else if let sourceError = model.sourceError {
+            if let sourceError = model.sourceError {
                 Text(sourceError).font(.caption).foregroundStyle(ReaderTheme.secondaryText)
                 Button("Retry original") { model.retrySource() }
             } else if model.sourceLoading {
                 Text("Preparing the original preview…").font(.caption).foregroundStyle(ReaderTheme.secondaryText)
             }
             if !model.isProcessing {
-                Button("Recover document text…", action: onRecover).buttonStyle(.bordered)
+                Button("Recover document text…", action: onRecover)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
         }
         .frame(maxWidth: 380)
@@ -737,7 +705,10 @@ private struct DocumentDetailsView: View {
             .font(.callout)
             Text("Read Along keeps a managed copy on this Mac. Your original file is unchanged.")
                 .font(.caption).foregroundStyle(ReaderTheme.secondaryText)
-            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("Done") { dismiss() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut(.defaultAction) }
         }
         .padding(28)
         .frame(width: 440)
@@ -750,64 +721,6 @@ private struct DocumentDetailsView: View {
             Text(label).foregroundStyle(ReaderTheme.secondaryText)
             Text(value).textSelection(.enabled)
         }
-    }
-}
-
-private enum ReaderShellLayout {
-    static func effectivePane(_ preference: ViewPane, width: CGFloat, lastPane: ViewPane) -> ViewPane {
-        preference == .split && width < 720 ? (lastPane == .original ? .original : .text) : preference
-    }
-
-    #if DEBUG
-    static func validate() {
-        assert(effectivePane(.split, width: 719, lastPane: .original) == .original)
-        assert(effectivePane(.split, width: 720, lastPane: .text) == .split)
-        assert(effectivePane(.text, width: 500, lastPane: .original) == .text)
-    }
-    #endif
-}
-
-/// Page controls for the text pane: same pill styling as the PDF toolbar, but
-/// navigation only — there is nothing to zoom in text.
-struct TextPageNavToolbar: View {
-    @EnvironmentObject private var model: ReaderModel
-    @State private var pageInput: String = ""
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Menu("Pages") {
-                ForEach(1...max(1, model.pageModel.pages.count), id: \.self) { page in
-                    Button("Page \(page)") { model.setPage(page - 1) }
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            Button { model.setPage(model.displayPage - 1) } label: { Image(systemName: "chevron.left") }
-                .buttonStyle(.bordered)
-                .disabled(model.displayPage <= 0)
-                .accessibilityLabel("Previous")
-            TextField("", text: $pageInput)
-                .frame(width: 44)
-                .onAppear { pageInput = "\(model.displayPage + 1)" }
-                .onChange(of: model.displayPage) { _, v in pageInput = "\(v + 1)" }
-                .onSubmit {
-                    if let n = Int(pageInput), (1...max(1, model.pageModel.pages.count)).contains(n) {
-                        model.setPage(n - 1)
-                    } else {
-                        pageInput = "\(model.displayPage + 1)"
-                    }
-                }
-                .onExitCommand { pageInput = "\(model.displayPage + 1)" }
-            Text("/ \(model.pageModel.pages.count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Button { model.setPage(model.displayPage + 1) } label: { Image(systemName: "chevron.right") }
-                .buttonStyle(.bordered)
-                .disabled(model.displayPage >= model.pageModel.pages.count - 1)
-                .accessibilityLabel("Next")
-        }
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
     }
 }
 

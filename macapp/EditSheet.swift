@@ -20,7 +20,8 @@ struct EditSheet: View {
                     } label: {
                         Image(systemName: "chevron.left")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
                     .disabled(page <= 0)
                     Text("Page \(page + 1) of \(max(1, model.pageModel.pages.count))")
                         .font(.callout.monospacedDigit())
@@ -30,7 +31,8 @@ struct EditSheet: View {
                     } label: {
                         Image(systemName: "chevron.right")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
                     .disabled(page >= model.pageModel.pages.count - 1)
                     Spacer()
                     Button("Reprocess document") {
@@ -39,10 +41,12 @@ struct EditSheet: View {
                         dismiss()
                     }
                     .controlSize(.small)
+                    .buttonStyle(.bordered)
                     Button("Export JPEG…") {
                         export()
                     }
                     .controlSize(.small)
+                    .buttonStyle(.bordered)
                 }
             }
             .padding(.horizontal, 16)
@@ -66,10 +70,12 @@ struct EditSheet: View {
                     model.showEdit = false
                     dismiss()
                 }
+                .controlSize(.small)
                 .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Save Text") { save() }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                     .keyboardShortcut("s", modifiers: .command)
                     .keyboardShortcut(.defaultAction)
                     .disabled(working || model.pageModel.pages.isEmpty)
@@ -80,7 +86,6 @@ struct EditSheet: View {
         .onAppear {
             page = min(max(0, model.displayPage), max(0, model.pageModel.pages.count - 1))
             load()
-            model.stopNarration()
             model.stopFollow()
         }
         .onChange(of: model.pageModel) { _, _ in

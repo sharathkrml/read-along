@@ -100,7 +100,7 @@ struct PageView: View {
                     }
                 }
             }
-            .overlay(alignment: .bottom) { pageNav }
+
         }
     }
 
@@ -110,38 +110,6 @@ struct PageView: View {
 
     private var nextBoxes: [[Double]] {
         model.groupBoxes(range: model.nextRange, page: model.displayPage)
-    }
-
-    @ViewBuilder private var pageNav: some View {
-        if model.pageModel.pages.count > 1 {
-            HStack(spacing: 12) {
-                Button {
-                    model.setPage(max(0, model.displayPage - 1))
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.displayPage <= 0)
-                Text("Page \(model.displayPage + 1) of \(max(1, model.pageModel.pages.count))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Button {
-                    model.setPage(min(model.pageModel.pages.count - 1, model.displayPage + 1))
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.displayPage >= model.pageModel.pages.count - 1)
-            }
-            .padding(10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(.separator)
-            )
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-            .padding(.bottom, model.pageModel.words.isEmpty ? 14 : 78)
-        }
     }
 }
 

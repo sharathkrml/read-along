@@ -18,6 +18,8 @@ enum ReaderTheme {
                                        contrastLight: 0x302000, contrastDark: 0xFFEEC2)
     static let nsReadingStroke = adaptive("readingStroke", light: 0x9A650B, dark: 0xE8B95B,
                                           contrastLight: 0x704600, contrastDark: 0xFFD078)
+    static let nsReadingNext = adaptive("readingNext", light: 0x0066CC, dark: 0x3A9EFF,
+                                        contrastLight: 0x004499, contrastDark: 0x5AA9FF)
 
     static let canvas = Color(nsColor: nsCanvas)
     static let surface = Color(nsColor: nsSurface)
@@ -28,6 +30,7 @@ enum ReaderTheme {
     static let readingFill = Color(nsColor: nsReadingFill)
     static let readingInk = Color(nsColor: nsReadingInk)
     static let readingStroke = Color(nsColor: nsReadingStroke)
+    static let readingNext = Color(nsColor: nsReadingNext)
 
     static let gutter: CGFloat = 24
     static let cardRadius: CGFloat = 16

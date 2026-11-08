@@ -73,6 +73,7 @@ struct ReaderTextView: NSViewRepresentable {
         private var textFollowEnabled = true
         private var sourceFollowEnabled = true
         private var documentID: String?
+        private var lastSyncedPage: Int?
         private static var handledFindRequest = 0
         private(set) var spans: [Span] = []
 
@@ -100,9 +101,11 @@ struct ReaderTextView: NSViewRepresentable {
                 spec.currentStart = -1
                 spec.nextStart = -1
             }
-            // cursor is advanced by real AVSpeech range callbacks, never an animation clock.
-            let spokenWord = model.prefs.mode == .read && model.transportState == .playing && !model.isComplete
-                ? model.cursor : nil
+            // cursor is advanced by real speech range callbacks, never an animation clock.
+            // Underline the word being read (cursor - 1), matching the yellow highlight;
+            // cursor itself is the next phrase, shown in blue.
+            let spokenWord = model.transportState == .playing && !model.isComplete
+                ? max(0, model.cursor - 1) : nil
             let next = HighlightState(spec: spec, spokenWord: spokenWord)
             let changed = next != highlighted
             if rebuilt || changed {
@@ -112,6 +115,17 @@ struct ReaderTextView: NSViewRepresentable {
             textFollowEnabled = model.viewer.textFollows
             if textFollowEnabled && (rebuilt || changed || !followed) { scrollToCurrent(in: view) }
             followed = textFollowEnabled
+            // When browsing (textFollows off) and the page changes, scroll to the first
+            // word on the browsed page so Text, Original, and Split stay in sync.
+            if !textFollowEnabled {
+                let page = model.displayPage
+                if lastSyncedPage != page {
+                    lastSyncedPage = page
+                    if let firstWordIndex = model.pageModel.words.firstIndex(where: { $0.page == page }) {
+                        scrollToWord(firstWordIndex, in: view)
+                    }
+                }
+            }
 
             if Self.handledFindRequest != model.findRequest, stage == model.presentVisible {
                 Self.handledFindRequest = model.findRequest
@@ -202,6 +216,26 @@ struct ReaderTextView: NSViewRepresentable {
             isProgrammaticScroll = false
         }
 
+        private func scrollToWord(_ word: Int, in view: JumpTextView) {
+            guard view.selectedRange().length == 0,
+                  let range = characterRange(word..<(word + 1)),
+                  let manager = view.layoutManager, let container = view.textContainer,
+                  let scroll = view.enclosingScrollView else { return }
+            manager.ensureLayout(forCharacterRange: range)
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let line = manager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+            let visible = view.visibleRect
+            guard visible.height > 0 else { return }
+            let band = visible.minY + visible.height * 0.30 ... visible.minY + visible.height * 0.60
+            guard line.minY < band.lowerBound || line.maxY > band.upperBound else { return }
+            let y = min(max(0, line.midY - visible.height * 0.43), max(0, view.bounds.height - visible.height))
+            isProgrammaticScroll = true
+            scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            isProgrammaticScroll = false
+        }
+
         private func applyHighlight(_ next: HighlightState, in view: JumpTextView) {
             guard let manager = view.layoutManager, let storage = view.textStorage, storage.length > 0 else { return }
             var dirty: [NSRange] = []
@@ -237,6 +271,14 @@ struct ReaderTextView: NSViewRepresentable {
                     if intersection.length > 0 {
                         manager.addTemporaryAttributes([.backgroundColor: ReaderTheme.nsReadingFill,
                                                         .foregroundColor: ReaderTheme.nsReadingInk], forCharacterRange: intersection)
+                    }
+                }
+                if next.spec.nextStart >= 0, next.spec.nextEnd > next.spec.nextStart,
+                   let nxt = characterRange(next.spec.nextStart..<next.spec.nextEnd) {
+                    let intersection = NSIntersectionRange(nxt, range)
+                    if intersection.length > 0 {
+                        manager.addTemporaryAttributes([.backgroundColor: ReaderTheme.nsReadingNext.withAlphaComponent(0.35),
+                                                        .foregroundColor: ReaderTheme.nsReadingNext], forCharacterRange: intersection)
                     }
                 }
                 if let word = next.spokenWord, let spoken = characterRange(word..<(word + 1)) {

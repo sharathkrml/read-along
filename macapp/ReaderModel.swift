@@ -22,24 +22,6 @@ enum FeedbackKind {
     case light, navigation, success, error
 }
 
-/// One sentence-sized span of the document for "Read to me". `start`/`end` are
-/// UTF-16 offsets inside the full narration text, so `chars` can return the
-/// global word index behind any offset in the spoken range.
-struct NarrationChunk {
-    var start = 0
-    var end = 0
-    var spoken = ""
-    var firstWord = 0
-    var lastWord = 0
-}
-
-struct NarrationData {
-    var text = ""
-    var chars: [Int] = []      // UTF-16 offset -> global word index (may repeat)
-    var breaks: Set<Int> = []  // block changes also end the current chunk
-    var chunks: [NarrationChunk] = []
-}
-
 func playSound(_ name: String) {
     NSSound(named: NSSound.Name(name))?.play()
 }
@@ -68,8 +50,6 @@ final class ReaderModel: ObservableObject {
     @Published var pendingDelete: Document?
     @Published var pendingRemove: String?
     @Published var toast: Toast?
-    @Published var narrationActive = false
-    @Published var narrationPaused = false
     @Published var microphones = Microphones()
     @Published var selectedMicID: Int?
     @Published var micPermissionState: AVAuthorizationStatus = .notDetermined
@@ -92,11 +72,9 @@ final class ReaderModel: ObservableObject {
     @Published var prefs: Prefs {
         didSet { Self.savePrefs(prefs) }
     }
-    @Published private(set) var voiceList: [SpeechController.Voice] = []
 
     // MARK: internals
 
-    let speech = SpeechController()
     var activeWindow = true
     var activeDocument: Document? {
         library.documents.first(where: { $0.id == library.active })
@@ -118,29 +96,17 @@ final class ReaderModel: ObservableObject {
     private var pendingImportURL: URL?
     private var followGeneration = 0
     private var wantsFollow = false
-    private var speechStartTask: Task<Void, Never>?
     private var positionTask: Task<Void, Never>?
     private var pendingPosition: (String, Int)?
     private var seekVersion = 0
     private var acknowledgedSeekVersion = 0
     private var scrubOrigin: Int?
-    private var scrubWasActive = false
     private var scrubDocumentID: String?
     private var waitingForText = false
     private var pendingRecoveryDocumentID: String?
     private var presentedDependencyDocumentID: String?
     private weak var presentWindow: NSWindow?
     private var focusOwnsFullscreen = false
-    private var narration = NarrationData()
-    private var narrationQueue: [NarrationChunk] = []
-    private var narrationIndex = -1
-    private var narrationID = ""
-    private var narrationLastGroup = -1
-    private var narrationActiveFlag = false
-    private var narrationPausedFlag = false
-    private var narrationBase = 0      // utterance offset 0 maps to narration.text offset
-    private var narrationSpeaker = false
-    private var builtNarration = false
 
     private static let prefsKey = "readalong.prefs.v2"
 
@@ -150,37 +116,13 @@ final class ReaderModel: ObservableObject {
         } else {
             prefs = Prefs()
         }
-        voiceList = speech.voices()
         imageCache.totalCostLimit = 48 * 1024 * 1024
         imageCache.countLimit = 5
-        wireSpeech()
     }
 
     private static func savePrefs(_ preferences: Prefs) {
         if let data = try? JSONEncoder().encode(preferences) {
             UserDefaults.standard.set(data, forKey: prefsKey)
-        }
-    }
-
-    private func wireSpeech() {
-        speech.onStart = { [weak self] id in
-            Task { @MainActor in
-                guard let self, id == self.narrationID, self.narrationActiveFlag else { return }
-                self.speechStartTask?.cancel()
-                self.transportState = self.narrationPausedFlag ? .paused : .playing
-            }
-        }
-        speech.onRange = { [weak self] id, offset, _ in
-            Task { @MainActor in self?.handleSpeechRange(id: id, offset: offset) }
-        }
-        speech.onEnd = { [weak self] id in
-            Task { @MainActor in self?.handleSpeechEnd(id: id) }
-        }
-        speech.onCancel = { [weak self] id in
-            Task { @MainActor in self?.finishNarration(id: id) }
-        }
-        speech.onError = { [weak self] id, message in
-            Task { @MainActor in self?.handleSpeechError(id: id, message: message) }
         }
     }
 
@@ -206,31 +148,30 @@ final class ReaderModel: ObservableObject {
     }
     var transportTitle: String {
         switch transportState {
-        case .preparing: return prefs.mode == .read ? "Preparing voice…" : "Preparing voice following…"
-        case .playing: return "Pause reading"
-        case .paused: return "Resume reading"
+        case .preparing: return "Preparing voice following…"
+        case .playing: return "Stop listening"
+        case .paused: return "Resume listening"
         case .listening: return "Stop listening"
         case .stopping: return "Stopping…"
         case .waitingForText: return "Waiting for the next page…"
         case .failed: return "Try again"
-        case .idle: return isComplete ? "Read again" : (prefs.mode == .read ? "Read to me" : "Start listening")
+        case .idle: return isComplete ? "Listen again" : "Start listening"
         }
     }
     var transportSubtitle: String {
         if let operationError, transportState == .failed { return operationError }
         switch transportState {
-        case .preparing:
-            return prefs.mode == .read ? "Starting your installed macOS voice. You can stop at any time." : "Preparing the local speech engine. The microphone starts only for this session."
+        case .preparing: return "Preparing the local speech engine. The microphone starts only for this session."
         case .waitingForText: return "Text recovery is continuing. Stop to cancel automatic continuation."
         case .listening: return followStatusText
         case .paused: return "Your place is kept. Resume whenever you're ready."
         case .stopping: return "Closing the active audio session."
-        default: return isComplete ? "Finished reading. Your place is saved." : (wordsLeft ?? "Your words. Your pace.")
+        default: return isComplete ? "Finished reading. Your place is saved." : "Your words. Your pace."
         }
     }
     var transportSymbol: String {
         switch transportState {
-        case .playing: return "pause.fill"
+        case .playing: return "stop.fill"
         case .listening, .preparing, .stopping, .waitingForText: return "stop.fill"
         default: return isComplete ? "arrow.counterclockwise" : "play.fill"
         }
@@ -261,7 +202,11 @@ final class ReaderModel: ObservableObject {
 
     var currentGroupIndex: Int {
         guard !pageModel.groups.isEmpty else { return -1 }
-        if let i = pageModel.groups.firstIndex(where: { cursor < $0.end }) {
+        // `cursor` points one past the last word confirmed as read, so the
+        // phrase being read is the group containing cursor - 1. Highlighting
+        // the group at `cursor` would light up the next phrase before it's read.
+        let position = max(0, cursor - 1)
+        if let i = pageModel.groups.firstIndex(where: { position < $0.end }) {
             return i
         }
         return pageModel.groups.count - 1
@@ -341,16 +286,6 @@ final class ReaderModel: ObservableObject {
         return isProcessing ? min(99, percent) : percent
     }
 
-    /// A sentence the reader can digest: raw words, then a compact clock estimate.
-    var wordsLeft: String? {
-        guard prefs.mode == .read else { return nil }
-        let remaining = max(0, wordsTotal - cursor)
-        guard remaining > 0 else { return nil }
-        let seconds = Double(remaining) / Double(175 * max(0.1, prefs.speed)) * 60
-        let minutes = max(1, Int((seconds / 60).rounded(.up)))
-        return "About \(minutes) min left"
-    }
-
     var processingCopy: String {
         if state.ocr_status == "running" {
             switch state.ocr_phase {
@@ -402,7 +337,6 @@ final class ReaderModel: ObservableObject {
     /// Quit path: flush the exact position before the owned backend is terminated.
     /// Blocking is bounded (2 s) and runs the request off the main actor.
     func flushForTermination() {
-        speech.stop()
         guard let c = client, !pageModel.words.isEmpty else { return }
         let target = cursor
         let listening = state.status == "listening"
@@ -438,7 +372,7 @@ final class ReaderModel: ObservableObject {
         if let docID = newState.doc_id, library.active != docID {
             library.active = docID
         }
-        if !narrationActive, let pos = newState.pos {
+        if let pos = newState.pos {
             cursor = clamp(pos)
         }
         if previousDoc != newState.doc_id || previousModelWords != newState.model_words {
@@ -452,20 +386,18 @@ final class ReaderModel: ObservableObject {
             micLevel = 0
         }
         state = newState
-        if prefs.mode == .follow {
-            switch newState.status {
-            case "listening":
-                transportState = .listening
-                // Never leave the microphone open after the last word is reached.
-                if let pos = newState.pos, let total = newState.total, total > 0, pos >= total {
-                    stopFollow()
-                }
-            case "loading": transportState = .preparing
-            case "error": if transportState == .listening || transportState == .preparing { transportState = .failed }
-            default:
-                // Keep an explicit start in Preparing until it really begins or fails.
-                if transportState == .listening { transportState = .idle }
+        switch newState.status {
+        case "listening":
+            transportState = .listening
+            // Never leave the microphone open after the last word is reached.
+            if let pos = newState.pos, let total = newState.total, total > 0, pos >= total {
+                stopFollow()
             }
+        case "loading": transportState = .preparing
+        case "error": if transportState == .listening || transportState == .preparing { transportState = .failed }
+        default:
+            // Keep an explicit start in Preparing until it really begins or fails.
+            if transportState == .listening { transportState = .idle }
         }
         // Polling must not cancel/restart an in-flight page image every tick.
         loadPageImage()
@@ -504,7 +436,6 @@ final class ReaderModel: ObservableObject {
 
     func openDocument(_ id: String?) {
         guard let id, id != library.active else { return }
-        stopNarration()
         if state.status == "listening" || transportState == .listening || transportState == .preparing {
             stopFollow()
         }
@@ -614,7 +545,6 @@ final class ReaderModel: ObservableObject {
     }
 
     func deleteDocument(_ doc: Document) {
-        if doc.id == library.active { stopNarration() }
         pendingDelete = nil
         Task {
             do {
@@ -663,7 +593,6 @@ final class ReaderModel: ObservableObject {
         pageModel = payload
         modelRevision += 1
         contentRevision += 1
-        builtNarration = false
         imageCache.removeAllObjects()
         cursor = clamp(state.pos ?? cursor)
         loadPageImage(force: true)
@@ -697,18 +626,12 @@ final class ReaderModel: ObservableObject {
     }
 
     /// One explicit seek for word clicks, phrase commands, scrubbing, and menus.
-    /// A running narration is restarted from the new word; a paused one stays paused.
     func seek(word: Int, quiet: Bool = false) {
         guard !pageModel.words.isEmpty else { return }
         let target = clamp(word)
-        let wasActive = narrationActive
-        let wasPlaying = wasActive && !narrationPaused
-        if wasActive { stopNarration(persist: false) }
         cursor = target
         viewer.browsedPage = nil
         persistPosition(target)
-        if wasActive { transportState = wasPlaying ? .preparing : .paused }
-        if wasPlaying { Task { await startNarration() } }
         if !quiet { feedback(.navigation) }
     }
 
@@ -733,266 +656,6 @@ final class ReaderModel: ObservableObject {
         let start = max(0, currentGroupIndex)
         let target = max(0, min(start + delta, pageModel.groups.count - 1))
         jump(word: pageModel.groups[target].start)
-    }
-
-    // MARK: narration
-
-    private func buildNarration() {
-        guard !builtNarration else { return }
-        var text = ""
-        var chars: [Int] = []
-        var breaks = Set<Int>()
-        var lastReal = 0
-        var previous: Line?
-        for line in pageModel.lines {
-            if let p = previous {
-                let blockChanged = (line.block ?? 0) != (p.block ?? 0)
-                let sep = blockChanged ? "\n" : ((line.sep == " · ") ? " · " : " ")
-                text += sep
-                chars.append(contentsOf: Array(repeating: lastReal, count: (sep as NSString).length))
-                if blockChanged { breaks.insert(chars.count) }
-            }
-            for (ti, tok) in line.tokens.enumerated() {
-                if ti > 0 {
-                    text += " "
-                    chars.append(lastReal)
-                }
-                let tokenText = tok.text
-                if tokenText.isEmpty { continue }
-                text += tokenText
-                let mapped = (tok.w ?? -1) >= 0 ? tok.w! : lastReal
-                chars.append(contentsOf: Array(repeating: mapped, count: (tokenText as NSString).length))
-                if (tok.w ?? -1) >= 0 { lastReal = tok.w! }
-            }
-            previous = line
-        }
-        narration = NarrationData(text: text, chars: chars, breaks: breaks)
-        narration.chunks = computeChunks()
-        builtNarration = true
-    }
-
-    private func computeChunks() -> [NarrationChunk] {
-        let text = narration.text
-        guard !text.isEmpty else { return [] }
-        let units = Array(text.utf16)
-        let breakpoints = narration.breaks
-
-        func isWhitespace(_ index: Int) -> Bool {
-            guard let scalar = UnicodeScalar(units[index]) else { return false }
-            return CharacterSet.whitespacesAndNewlines.contains(scalar)
-        }
-
-        func skipWhitespace(_ i: Int) -> Int {
-            var i = i
-            while i < units.count && isWhitespace(i) { i += 1 }
-            return i
-        }
-
-        var start = 0
-        var i = 0
-        var spans: [(Int, Int)] = []
-        start = skipWhitespace(0)
-        i = start
-        while i < units.count {
-            var end = -1
-            if let scalar = UnicodeScalar(units[i]).map(Character.init), ".!?".contains(scalar) {
-                end = i + 1
-                while end < units.count {
-                    if let close = UnicodeScalar(units[end]).map(Character.init),
-                       "\"'”’)]}".contains(close) { end += 1 } else { break }
-                }
-                if end < units.count, !isWhitespace(end) { end = -1 }
-            }
-            if end == -1 && breakpoints.contains(i + 1) { end = i + 1 }
-            if end >= 0 {
-                spans.append((start, end))
-                start = skipWhitespace(end)
-                i = start
-                continue
-            }
-            i += 1
-        }
-        if start < units.count { spans.append((start, units.count)) }
-
-        let nsText = text as NSString
-        var chunks: [NarrationChunk] = []
-        for (start, end) in spans {
-            var first = Int.max
-            var last = -1
-            for j in start..<end {
-                guard j < narration.chars.count else { continue }
-                let w = narration.chars[j]
-                if w >= 0 { first = min(first, w); last = max(last, w) }
-            }
-            guard last >= 0, first <= last else { continue }
-            let spoken = nsText.substring(with: NSRange(location: start, length: end - start))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if spoken.isEmpty { continue }
-            chunks.append(NarrationChunk(start: start, end: end, spoken: spoken, firstWord: first, lastWord: last))
-        }
-        return chunks
-    }
-
-    private func startNarration() async {
-        guard !pageModel.words.isEmpty else {
-            showToast("There is no readable text yet.", isError: true)
-            return
-        }
-        buildNarration()
-        let target: Int
-        if cursor >= pageModel.words.count {
-            target = 0
-        } else {
-            target = currentRange?.lowerBound ?? cursor
-        }
-        jump(word: target, quiet: true)
-        let queue = narration.chunks.filter { $0.lastWord >= target }
-        guard !queue.isEmpty else {
-            showToast("You’re at the end of this document.")
-            return
-        }
-        narrationIndex = 0
-        narrationQueue = queue
-        narrationLastGroup = -1
-        transportState = .preparing
-        speakChunk(queue[0], startWord: target)
-        speechStartTask?.cancel()
-        speechStartTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
-            guard let self, !Task.isCancelled, self.transportState == .preparing else { return }
-            self.stopNarration()
-            self.showToast("This voice is taking longer to start. Try again or choose another voice.", isError: true)
-        }
-        feedback(.light)
-    }
-
-    private func chunkWordIndex(offset: Int, base: Int) -> Int {
-        let i = base + max(0, offset)
-        guard i < narration.chars.count else { return 0 }
-        return narration.chars[i]
-    }
-
-    private func speakChunk(_ chunk: NarrationChunk, startWord: Int?) {
-        let length = (chunk.spoken as NSString).length
-        var offset = 0
-        if let startWord, startWord > 0 {
-            for i in 0..<length {
-                if chunkWordIndex(offset: i, base: chunk.start) >= startWord {
-                    offset = i
-                    break
-                }
-            }
-        }
-        let spoken: String
-        if offset < length {
-            spoken = (chunk.spoken as NSString).substring(from: offset)
-        } else {
-            spoken = ""
-        }
-        if spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            finishNarration(id: narrationID)
-            return
-        }
-        narrationID = UUID().uuidString
-        narrationActiveFlag = true
-        narrationPausedFlag = false
-        narrationActive = true
-        narrationPaused = false
-        narrationBase = chunk.start + offset
-        narrationSpeaker = true
-        speech.speak(id: narrationID, text: spoken, voiceID: prefs.voice, rate: prefs.speed)
-    }
-
-    private func handleSpeechRange(id: String, offset: Int) {
-        guard id == narrationID, narrationActiveFlag, !narrationPausedFlag else { return }
-        if transportState != .playing { transportState = .playing }
-        let word = chunkWordIndex(offset: offset, base: narrationBase)
-        guard word >= cursor else { return }
-        cursor = word
-        let group = currentGroupIndex
-        if group != narrationLastGroup {
-            narrationLastGroup = group
-            let c = client
-            Task { _ = try? await c?.jump(word: word) }
-        }
-    }
-
-    private func handleSpeechEnd(id: String) {
-        guard id == narrationID else { return }
-        advanceNarration()
-    }
-
-    private func handleSpeechError(id: String, message: String) {
-        guard id == narrationID else { return }
-        finishNarration(id: id)
-        showToast("Speech stopped: \(message)", isError: true)
-    }
-
-    private func advanceNarration() {
-        let nextIndex = narrationIndex + 1
-        guard nextIndex < narrationQueue.count else {
-            finishNarration(id: narrationID)
-            cursor = pageModel.words.count
-            persistPosition(cursor)
-            showToast("End of document")
-            feedback(.success)
-            return
-        }
-        narrationIndex = nextIndex
-        let next = narrationQueue[nextIndex]
-        // Internal chunk advance must not stop/restart the active narration.
-        cursor = next.firstWord
-        persistPosition(cursor)
-        speakChunk(next, startWord: nil)
-    }
-
-    private func finishNarration(id: String) {
-        guard id == narrationID || narrationID.isEmpty || id.isEmpty else { return }
-        narrationID = ""
-        narrationActiveFlag = false
-        narrationPausedFlag = false
-        narrationActive = false
-        narrationPaused = false
-        narrationSpeaker = false
-        narrationBase = 0
-        transportState = .idle
-    }
-
-    func toggleNarration() {
-        if narrationActive && !narrationPaused {
-            narrationPausedFlag = true
-            narrationPaused = true
-            transportState = .paused
-            speech.pause()
-            persistPosition(cursor)
-            feedback(.navigation)
-            return
-        }
-        if narrationActive && narrationPaused {
-            narrationPausedFlag = false
-            narrationPaused = false
-            transportState = .playing
-            speech.resume()
-            feedback(.light)
-            return
-        }
-        Task { await startNarration() }
-    }
-
-    func stopNarration(persist: Bool = true) {
-        guard narrationActive else {
-            transportState = .idle
-            return
-        }
-        let target = cursor
-        speechStartTask?.cancel()
-        narrationActive = false
-        narrationActiveFlag = false
-        narrationPausedFlag = false
-        narrationPaused = false
-        speech.stop()
-        transportState = .idle
-        if persist { persistPosition(target) }
     }
 
     // MARK: follow mode
@@ -1058,87 +721,36 @@ final class ReaderModel: ObservableObject {
     }
 
     func togglePlay() {
-        if prefs.mode == .read { toggleNarration() } else { toggleFollow() }
-    }
-
-    func setVoice(_ voice: String) {
-        let wasActive = narrationActive && !narrationPaused
-        prefs.voice = voice
-        voiceList = speech.voices()
-        if wasActive {
-            stopNarration()
-            Task { await startNarration() }
-        }
-    }
-
-    func setSpeed(_ speed: Double) {
-        let wasActive = narrationActive && !narrationPaused
-        prefs.speed = speed
-        if wasActive {
-            stopNarration()
-            Task { await startNarration() }
-        }
+        toggleFollow()
     }
 
     func beginScrubbing() {
         scrubOrigin = cursor
-        scrubWasActive = narrationActive && !narrationPaused
         scrubDocumentID = library.active
-        if scrubWasActive {
-            narrationPausedFlag = true
-            narrationPaused = true
-            transportState = .paused
-            speech.pause()
-        }
     }
 
     func commitScrub(_ value: Double) {
         guard scrubDocumentID == library.active else { cancelScrubbing(); return }
         let total = max(1, pageModel.words.count)
         let target = max(0, min(total - 1, Int((value * Double(total)).rounded(.down))))
-        let wasActive = scrubWasActive
-        if narrationActive { stopNarration(persist: false) }
         cursor = target
         viewer.browsedPage = nil
         persistPosition(target)
-        if wasActive { Task { await startNarration() } }
         scrubOrigin = nil
-        scrubWasActive = false
         scrubDocumentID = nil
     }
 
     func cancelScrubbing() {
         if let origin = scrubOrigin { cursor = origin }
-        if scrubWasActive {
-            narrationPausedFlag = false
-            narrationPaused = false
-            transportState = .playing
-            speech.resume()
-        }
         scrubOrigin = nil
-        scrubWasActive = false
         scrubDocumentID = nil
     }
 
     func stopPlayback() {
-        if prefs.mode == .read {
-            stopNarration()
-        } else if state.status == "listening" || transportState == .preparing {
-            // Stop must also cancel a pending Follow me start, or the mic opens later.
+        if state.status == "listening" || transportState == .preparing {
             stopFollow()
         }
         transportState = .idle
-    }
-
-    func setMode(_ mode: PlaybackMode) {
-        guard prefs.mode != mode else { return }
-        if prefs.mode == .read { stopNarration() }
-        if prefs.mode == .follow && (state.status == "listening" || transportState == .preparing) {
-            stopFollow()
-        }
-        if mode == .follow { Task { await refreshMicrophones() } }
-        prefs.mode = mode
-        feedback(.navigation)
     }
 
     // MARK: page image
@@ -1246,7 +858,6 @@ final class ReaderModel: ObservableObject {
                 self.pageModel = model
                 self.modelRevision += 1
                 self.contentRevision += 1
-                self.builtNarration = false
                 self.cursor = self.clamp(self.cursor)
                 self.loadPageImage(force: true)
                 await self.refreshLibrary()

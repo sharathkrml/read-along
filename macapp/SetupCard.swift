@@ -6,15 +6,13 @@ struct SetupCard: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        if let key = model.modelSetupKey, key == "speech" || key == "ocr" {
+        if let key = model.modelSetupKey, key == "ocr" {
             VStack(alignment: .leading, spacing: 16) {
-                Label(key == "speech" ? "Set up voice following" : "Read handwriting on this Mac",
-                      systemImage: key == "speech" ? "waveform" : "pencil.and.outline")
+                Label("Set up voice following",
+                      systemImage: "waveform")
                     .font(.title3.weight(.semibold))
 
-                Text(key == "speech"
-                     ? "Follow me uses a small, English-only model to match your voice to the text. Read to me uses a macOS voice and needs no speech-following download."
-                     : "Handwriting recognition needs an optional local model. Text PDFs and many printed scans work without it; your original document stays available.")
+                Text("Follow me uses a small, English-only model to match your voice to the text.")
                     .font(.callout)
                     .foregroundStyle(ReaderTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -29,21 +27,13 @@ struct SetupCard: View {
 
                 HStack {
                     Button("Not now") { model.modelSetupKey = nil }
+                        .controlSize(.small)
                         .keyboardShortcut(.cancelAction)
                     Spacer()
                     if isInstalled(key) {
-                        if key == "speech", !model.pageModel.isEmpty {
-                            Button("Start listening") {
-                                model.modelSetupKey = nil
-                                model.setMode(.follow)
-                                model.togglePlay()
-                            }
+                        Button("Done") { model.modelSetupKey = nil }
                             .buttonStyle(.borderedProminent)
-                            .disabled(model.state.status == "listening" || model.state.status == "loading")
-                        } else {
-                            Button("Done") { model.modelSetupKey = nil }
-                                .buttonStyle(.borderedProminent)
-                        }
+                            .controlSize(.small)
                     }
                 }
             }

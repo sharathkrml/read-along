@@ -5,7 +5,7 @@ enum ViewPane: String, Codable, CaseIterable {
 }
 
 enum PlaybackMode: String, Codable, CaseIterable {
-    case read, follow
+    case follow
 }
 
 enum Appearance: String, Codable {
@@ -48,9 +48,6 @@ struct Prefs: Codable, Equatable {
     var guide = true
     var sound = false
     var haptic = false
-    var mode: PlaybackMode = .read
-    var voice = ""
-    var speed: Double = 1
     var pane: ViewPane = .text
     var ocrMode: String = "auto"
     var micName: String? = nil
@@ -59,7 +56,7 @@ struct Prefs: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case appearance, size, guide, sound, haptic, mode, voice, speed, pane, ocrMode, micName, readingFont
+        case appearance, size, guide, sound, haptic, pane, ocrMode, micName, readingFont
     }
 
     init(from decoder: Decoder) throws {
@@ -70,10 +67,6 @@ struct Prefs: Codable, Equatable {
         guide = (try? c.decode(Bool.self, forKey: .guide)) ?? true
         sound = (try? c.decode(Bool.self, forKey: .sound)) ?? false
         haptic = (try? c.decode(Bool.self, forKey: .haptic)) ?? false
-        mode = (try? c.decode(PlaybackMode.self, forKey: .mode)) ?? .read
-        voice = (try? c.decode(String.self, forKey: .voice)) ?? ""
-        let savedSpeed = (try? c.decode(Double.self, forKey: .speed)) ?? 1
-        speed = min(2, max(0.5, savedSpeed.isFinite ? savedSpeed : 1))
         pane = (try? c.decode(ViewPane.self, forKey: .pane)) ?? .text
         let savedOCR = (try? c.decode(String.self, forKey: .ocrMode)) ?? "auto"
         ocrMode = ["auto", "fast", "best"].contains(savedOCR) ? savedOCR : "auto"

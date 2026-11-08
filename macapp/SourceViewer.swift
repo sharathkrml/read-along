@@ -376,16 +376,18 @@ struct SourceViewerToolbar: View {
     @ObservedObject var controller: PDFSourceController
     @State private var pageInput: String = ""
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Menu("Pages") {
                 ForEach(1...max(1, controller.totalPages), id: \.self) { page in
                     Button("Page \(page)") { controller.goToPage(page) }
                 }
             }
             .menuStyle(.borderlessButton)
+            .controlSize(.small)
             .fixedSize()
             Button { controller.goPrev() } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(controller.currentPage <= 1)
                 .accessibilityLabel("Previous")
             TextField("", text: $pageInput)
@@ -401,19 +403,22 @@ struct SourceViewerToolbar: View {
                 }
                 .onExitCommand { pageInput = "\(controller.currentPage)" }
             Text("/ \(controller.totalPages)")
-                .font(.caption.monospacedDigit())
+                .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
             Button { controller.goNext() } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(controller.currentPage >= controller.totalPages)
                 .accessibilityLabel("Next")
             Button { controller.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Zoom out")
             Text("\(controller.zoomPercent)%")
-                .font(.caption.monospacedDigit())
+                .font(.caption2.monospacedDigit())
             Button { controller.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Zoom in")
             Menu("Fit") {
                 Button("Fit page") { controller.fitPage() }
@@ -421,8 +426,9 @@ struct SourceViewerToolbar: View {
                 Button("Actual size") { controller.actualSize() }
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
         }
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }

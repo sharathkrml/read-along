@@ -2110,12 +2110,20 @@ class DocumentStore:
         return source
 
     def open(self, doc_id: str) -> dict:
+        """Select a document without touching recency — the sidebar only
+        reorders when a reading session actually starts (see mark_read)."""
         with self.lock:
             doc = self.get(doc_id)
             self.active = doc_id
-            doc["last_opened"] = time.time()
             self._save()
             return doc
+
+    def mark_read(self, doc_id: str) -> None:
+        """Bump recency only when the user actually reads the document."""
+        with self.lock:
+            doc = self.get(doc_id)
+            doc["last_opened"] = time.time()
+            self._save()
 
     def update(self, doc_id: str, **fields) -> dict:
         with self.lock:
@@ -2140,8 +2148,6 @@ class DocumentStore:
             self.docs.remove(doc)
             if self.active == doc_id:
                 self.active = self.docs[0]["id"] if self.docs else None
-                if self.active:
-                    self.get(self.active)["last_opened"] = time.time()
             self._save()
             shutil.rmtree(self.path(doc_id), ignore_errors=True)
             return self.active
@@ -2493,6 +2499,8 @@ class App:
             self.status = "loading"
             self.error = ""
             self._want_listen = True
+            if self.documents and self.doc_id:
+                self.documents.mark_read(self.doc_id)
         threading.Thread(target=self._start_bg, daemon=True).start()
 
     def _start_bg(self) -> None:

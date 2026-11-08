@@ -167,23 +167,12 @@ struct ReadAlongApp: App {
                 .disabled(ReaderModel.shared.pageModel.words.isEmpty)
         }
 
-        CommandGroup(after: .sidebar) {
-            Button("Text") { ReaderModel.shared.prefs.pane = .text }
-                .keyboardShortcut("1", modifiers: .command)
-            Button("Original") { ReaderModel.shared.prefs.pane = .original }
-                .keyboardShortcut("2", modifiers: .command)
-            Button("Split") { ReaderModel.shared.prefs.pane = .split }
-                .keyboardShortcut("3", modifiers: .command)
-        }
     }
 }
 
 extension ReaderModel {
     /// Label for the Reader ▸ Play / Pause menu item.
     var playLabel: String {
-        if prefs.mode == .follow {
-            return isPlaying ? "Stop Listening" : "Listen"
-        }
-        return narrationActive && !narrationPaused ? "Pause" : "Play"
+        return isPlaying ? "Stop Listening" : "Listen"
     }
 }

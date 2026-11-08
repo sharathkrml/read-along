@@ -52,6 +52,14 @@ with tempfile.TemporaryDirectory(prefix="readalong-library-") as tmp:
 
     store.rename(first["id"], "  A   better title  ")
     check("rename normalized", store.get(first["id"])["title"], "A better title")
+
+    # Switching documents must not reorder the sidebar; only reading does.
+    order_before = [d["id"] for d in store.public()["documents"]]
+    store.open(first["id"])
+    store.open(second["id"])
+    check("switching keeps order", [d["id"] for d in store.public()["documents"]], order_before)
+    store.mark_read(first["id"])
+    check("reading moves to top", [d["id"] for d in store.public()["documents"]][0], first["id"])
     try:
         store.rename(first["id"], "   ")
         raise AssertionError("empty rename should fail")

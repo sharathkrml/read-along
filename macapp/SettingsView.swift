@@ -30,11 +30,7 @@ struct SettingsView: View {
     @EnvironmentObject private var model: ReaderModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var category: SettingsCategory? = .reading
-    @State private var voices: [SpeechController.Voice] = []
     @State private var permission = AVCaptureDevice.authorizationStatus(for: .audio)
-    @StateObject private var preview = SpeechController()
-    @State private var previewing = false
-    @State private var previewError: String?
 
     var body: some View {
         NavigationSplitView(columnVisibility: .constant(.all)) {
@@ -68,9 +64,7 @@ struct SettingsView: View {
         .preferredColorScheme(model.prefs.appearance == .system ? nil : model.prefs.appearance == .dark ? .dark : .light)
         .onAppear { model.refreshSetupAction() }
         .task(id: category) {
-            stopPreview()
             if category == .voice {
-                voices = model.speech.voices()
                 permission = AVCaptureDevice.authorizationStatus(for: .audio)
                 await model.refreshMicrophones()
             }
@@ -78,10 +72,8 @@ struct SettingsView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, category == .voice {
                 permission = AVCaptureDevice.authorizationStatus(for: .audio)
-                voices = model.speech.voices()
             }
         }
-        .onDisappear { stopPreview() }
     }
 
     private var readingSettings: some View {
@@ -123,7 +115,7 @@ struct SettingsView: View {
                 .padding(.vertical, 8)
             }
             Section {
-                Text("Read to me moves the guide with the narrator. Follow me matches your voice. Reading quietly never starts audio or the microphone.")
+                Text("Follow me listens as you read aloud and moves the guide with your voice. Reading quietly never starts audio or the microphone.")
                     .font(.callout)
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
@@ -132,37 +124,6 @@ struct SettingsView: View {
 
     private var voiceSettings: some View {
         Group {
-            Section("Read to me") {
-                Picker("Installed voice", selection: Binding(get: { model.prefs.voice }, set: { model.setVoice($0) })) {
-                    Text("System voice").tag("")
-                    ForEach(voices) { voice in
-                        Text("\(voice.name) · \(voice.language)").tag(voice.id)
-                    }
-                    if voiceUnavailable {
-                        Text("Saved voice · unavailable").tag(model.prefs.voice)
-                    }
-                }
-                Picker("Speed", selection: Binding(get: { model.prefs.speed }, set: { model.setSpeed($0) })) {
-                    ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { speed in
-                        Text("\(speed.formatted())×").tag(speed)
-                    }
-                }
-                Button(previewing ? "Stop preview" : "Preview voice") {
-                    if previewing { stopPreview() } else { startPreview() }
-                }
-                .disabled(model.isPlaying || voiceUnavailable)
-                if voiceUnavailable {
-                    Text("The saved voice is not installed. Choose an available voice or manage voices in System Settings.")
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                }
-                if let previewError {
-                    Text(previewError).foregroundStyle(.red)
-                }
-                Text("Uses an installed macOS voice, not the voice-following model. Additional voices are managed by macOS.")
-                    .font(.caption)
-                    .foregroundStyle(ReaderTheme.secondaryText)
-                Link("Manage macOS voices…", destination: URL(string: "x-apple.systempreferences:com.apple.preference.universalaccess?SpokenContent")!)
-            }
             Section("Follow me") {
                 Picker("Input device", selection: Binding(
                     get: { model.selectedMicID },
@@ -235,10 +196,9 @@ struct SettingsView: View {
                     .foregroundStyle(ReaderTheme.secondaryText)
             }
             Section("Optional models") {
-                Text("Text PDFs and Read to me work without either model. Downloads are never started automatically.")
+                Text("Text PDFs work without either model. Downloads are never started automatically.")
                     .font(.callout)
                     .foregroundStyle(ReaderTheme.secondaryText)
-                ModelCard(key: "speech")
                 ModelCard(key: "ocr")
             }
         }
@@ -274,10 +234,6 @@ struct SettingsView: View {
         }
     }
 
-    private var voiceUnavailable: Bool {
-        !model.prefs.voice.isEmpty && !voices.contains { $0.id == model.prefs.voice }
-    }
-
     private var permissionLabel: String {
         switch permission {
         case .authorized: return "Allowed"
@@ -288,23 +244,6 @@ struct SettingsView: View {
         }
     }
 
-    private func startPreview() {
-        previewError = nil
-        previewing = true
-        preview.onEnd = { _ in Task { @MainActor in previewing = false } }
-        preview.onCancel = { _ in Task { @MainActor in previewing = false } }
-        preview.onError = { _, message in Task { @MainActor in previewing = false; previewError = message } }
-        preview.speak(id: "settings-preview", text: "Your words. Your pace. Make a little room for a good read.",
-                      voiceID: model.prefs.voice, rate: model.prefs.speed)
-    }
-
-    private func stopPreview() {
-        preview.stop()
-        preview.onEnd = nil
-        preview.onCancel = nil
-        preview.onError = nil
-        previewing = false
-    }
 }
 
 enum ModelInstallPhase {
@@ -354,22 +293,20 @@ struct ModelCard: View {
     @EnvironmentObject private var model: ReaderModel
     let key: String
 
-    private var status: ModelStatus? { key == "speech" ? model.setup.speech : model.setup.ocr }
+    private var status: ModelStatus? { model.setup.ocr }
     private var phase: ModelInstallPhase { ModelInstallPhase(status?.state) }
-    private var title: String { key == "speech" ? "Voice following" : "Handwriting recognition" }
+    private var title: String { "Handwriting recognition" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: key == "speech" ? "waveform" : "pencil.and.outline")
+                Image(systemName: "pencil.and.outline")
                     .font(.title3)
                     .foregroundStyle(ReaderTheme.secondaryText)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(.headline)
-                    Text(key == "speech"
-                         ? "For Follow me · English only · about 158 MB"
-                         : "For handwriting and difficult scans · about 1.6 GB")
+                    Text("For handwriting and difficult scans · about 1.6 GB")
                         .font(.caption)
                         .foregroundStyle(ReaderTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -460,8 +397,7 @@ struct ModelCard: View {
             .font(.caption)
         }
         .padding(.vertical, 8)
-        .confirmationDialog(key == "speech" ? "Remove voice-following model?" : "Remove handwriting model?",
-                            isPresented: confirmBinding, titleVisibility: .visible) {
+        .confirmationDialog("Remove handwriting model?", isPresented: confirmBinding, titleVisibility: .visible) {
             Button("Remove \(title)", role: .destructive) {
                 guard model.pendingRemove == key, !removalBlocked else { return }
                 model.pendingRemove = nil
@@ -500,17 +436,12 @@ struct ModelCard: View {
     }
 
     private var removalBlocked: Bool {
-        if key == "speech" { return ["loading", "listening", "stopping"].contains(model.state.status ?? "") }
         return ["running", "processing", "loading"].contains(model.state.ocr_status ?? "")
             || model.library.documents.contains { $0.statusName == "processing" }
     }
 
     private var removalMessage: String {
-        let consequence = key == "speech"
-            ? "Follow me will need another download. Read to me and your saved documents are not removed."
-            : "Saved recovered text remains available. Recovering handwriting again may require another download."
-        guard let bytes = status?.bytes, bytes > 0 else { return consequence }
-        return "\(consequence) About \(Self.formattedBytes(bytes)) may be freed."
+        "Saved recovered text remains available. Recovering handwriting again may require another download."
     }
 
     private var confirmBinding: Binding<Bool> {
@@ -538,13 +469,8 @@ struct ModelCard: View {
         guard let path, path.hasPrefix("/"), !path.contains("\0") else { return nil }
         let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         let parts = url.pathComponents
-        let knownModel: Bool
-        switch key {
-        case "speech": knownModel = parts.contains { $0.contains("Phonon-2.5-English") }
-        case "ocr": knownModel = parts.contains("models--LiquidAI--LFM3-VL-2B-MLX-4bit")
+        let knownModel = parts.contains("models--LiquidAI--LFM3-VL-2B-MLX-4bit")
             || (url.lastPathComponent == "ocr" && url.deletingLastPathComponent().lastPathComponent == "models")
-        default: return nil
-        }
         var directory: ObjCBool = false
         guard knownModel, FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { return nil }
         return url

@@ -73,8 +73,10 @@ struct SidebarView: View {
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
+                        .imageScale(.medium)
                 }
                 .buttonStyle(.plain)
+                .controlSize(.small)
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .help("Clear search")
                 .accessibilityLabel("Clear document search")
@@ -105,10 +107,10 @@ struct SidebarView: View {
             Button { model.importDocument() } label: {
                 Label("Import Document…", systemImage: "plus")
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 5)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
             .help("Import one PDF, JPEG, or PNG, up to 25 MB (⌘O)")
         }
         .padding(12)
@@ -269,6 +271,7 @@ struct RenameSheet: View {
             .font(.caption)
             HStack {
                 Button("Cancel") { model.pendingRename = nil; dismiss() }
+                    .controlSize(.small)
                     .keyboardShortcut(.cancelAction)
                     .disabled(saving)
                 Spacer()
@@ -281,6 +284,7 @@ struct RenameSheet: View {
                     model.renameDocument(doc, title: cleanName)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .keyboardShortcut(.defaultAction)
                 .disabled(saving || validation != nil || cleanName == doc.title)
             }
