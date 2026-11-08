@@ -559,7 +559,7 @@ private struct TextUnavailableView: View {
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Text(error ?? (model.isProcessing
-                 ? "The original is available while text recovery continues. Ready pages will appear here as they finish."
+                 ? model.processingCopy
                  : "This page may contain a photo or an illustration. You can browse the original, or try recovering the document’s text again."))
                 .font(.callout)
                 .foregroundStyle(ReaderTheme.secondaryText)

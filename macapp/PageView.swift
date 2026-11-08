@@ -122,10 +122,10 @@ struct SpacedPageView: View {
         VStack {
             if let image = model.pageImage, let info = model.pageInfo {
                 page(image: image, aspect: info.width / max(1, info.height))
-            } else if !model.pageModel.pages.isEmpty {
-                placeholder
             } else {
-                EmptyView()
+                // Never leave this pane empty: while OCR is still publishing
+                // pages, show a busy placeholder instead of a blank wall.
+                placeholder
             }
         }
         .padding(28)
@@ -166,12 +166,13 @@ struct SpacedPageView: View {
     var placeholder: some View {
         VStack(spacing: 10) {
             ProgressView()
-            Text("Page")
+            Text(model.isProcessing ? "Loading the original…" : "Page")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 200)
+        .accessibilityLabel(model.isProcessing ? "Loading the original" : "Page")
     }
 
     @ViewBuilder private var overlayCanvas: some View {

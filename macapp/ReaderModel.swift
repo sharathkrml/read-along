@@ -374,13 +374,17 @@ final class ReaderModel: ObservableObject {
     private func applyState(_ newState: ReaderState) async {
         let previousDoc = state.doc_id
         let previousModelWords = state.model_words
+        let previousModelPages = state.model_pages
+        let previousRevision = state.model_revision
         if let docID = newState.doc_id, library.active != docID {
             library.active = docID
         }
         if let pos = newState.pos {
             cursor = clamp(pos)
         }
-        if previousDoc != newState.doc_id || previousModelWords != newState.model_words {
+        if previousDoc != newState.doc_id || previousModelWords != newState.model_words
+            || previousModelPages != newState.model_pages
+            || previousRevision != newState.model_revision {
             await loadModel()
         }
         let listening = newState.status == "listening"

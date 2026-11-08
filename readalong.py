@@ -507,7 +507,7 @@ VISION_LOCK = threading.Lock()
 
 def vision_lines(path: Path) -> list[dict]:
     with VISION_LOCK:
-        return _vision_lines(path)
+        return _vision_via_subprocess(path)
 
 
 def _vision_lines(path: Path) -> list[dict]:
@@ -551,6 +551,41 @@ def _vision_lines(path: Path) -> list[dict]:
         except Exception:
             continue
     return []
+
+
+VISION_HELPER_ARG = "--vision-helper"
+
+
+def _vision_helper_main(argv: list[str]) -> int:
+    """Run one Vision request in this child process and print JSON lines."""
+    try:
+        lines = _vision_lines(Path(argv[0]))
+    except Exception:
+        lines = []
+    print(json.dumps(lines))
+    return 0
+
+
+def _vision_via_subprocess(path: Path) -> list[dict]:
+    """Vision in a short-lived child, so a native Vision crash degrades to
+    no line boxes instead of killing the reader."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), VISION_HELPER_ARG, str(path)],
+            capture_output=True, text=True, timeout=300,
+        )
+    except Exception:
+        return _vision_lines(path)
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip()[-300:]
+        if tail:
+            print(f"[ocr] Vision helper failed ({proc.returncode}): {tail}", file=sys.stderr)
+        return []
+    try:
+        lines = json.loads(proc.stdout or "[]")
+    except Exception:
+        return []
+    return lines if isinstance(lines, list) else []
 
 
 def _vision_box(v: dict) -> list[float]:
@@ -2657,8 +2692,12 @@ class App:
         return next_id
 
     def shutdown(self) -> None:
-        with self.lock:
-            self._persist_position(force=True)
+        # Position is persisted continuously; never hang process exit on it.
+        if self.lock.acquire(timeout=2):
+            try:
+                self._persist_position(force=True)
+            finally:
+                self.lock.release()
         self.models.shutdown()
         self.asr.shutdown()
 
@@ -2905,6 +2944,8 @@ class Handler(BaseHTTPRequestHandler):
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
+    if len(sys.argv) > 2 and sys.argv[1] == VISION_HELPER_ARG:
+        raise SystemExit(_vision_helper_main(sys.argv[2:]))
     ap = argparse.ArgumentParser(description="OCR a page or PDF and read along with it.")
     ap.add_argument("--image", help="image or PDF to open (copied into data/)")
     ap.add_argument("--port", type=int, default=WEB_PORT)
@@ -2992,6 +3033,8 @@ def main() -> None:
     finally:
         server.shutdown()
         APP.shutdown()
+        # A stuck worker must not strand the process as an orphan backend.
+        os._exit(0)
 
 
 def _sigterm(signum, frame):
