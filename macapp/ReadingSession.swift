@@ -1,5 +1,14 @@
 import Foundation
 
+/// Shared UI enums and value types used across the SwiftUI shell.
+///
+/// ViewPane: which reader column is expanded (text / original / split).
+/// Appearance: light / dark / system theme.
+/// TransportState: the Follow me lifecycle (idle -> preparing -> playing|listening -> ...).
+/// ZoomMode / ViewerState: per-document zoom and scroll preferences the
+/// unified reader persists. Prefs: user settings persisted to UserDefaults.
+/// ReadingMath: progress and page-anchor helpers shared by the UI.
+
 enum ViewPane: String, Codable, CaseIterable {
     case text, original, split
 }

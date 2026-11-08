@@ -1,7 +1,15 @@
 import Foundation
 
-// Codable mirrors of the JSON the bundled Python backend serves. The server is
-// the source of truth; these structs only shape it for the UI.
+/// Codable mirrors of the JSON the bundled Python backend serves.
+///
+/// The server (readalong.web.Handler) is the source of truth. These structs
+/// only shape its responses for the SwiftUI layer: they decode library,
+/// page model, reading state, setup status, microphone, and model-status
+/// payloads. Fields the UI doesn't read are left optional so backend
+/// additions don't break decoding.
+///
+/// Backend field names are snake_case; Swift keeps camelCase via CodingKeys
+/// where the two differ (e.g. Microphones.defaultDevice <- "default").
 
 struct LibraryPayload: Decodable, Equatable {
     var active: String?

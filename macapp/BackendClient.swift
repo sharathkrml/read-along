@@ -1,6 +1,12 @@
 import AppKit
 
 /// Thin HTTP client for the bundled Python backend.
+///
+/// Every Swift-to-Python call goes through one of `get`/`post`, which speak
+/// JSON to the `readalong` ThreadingHTTPServer on localhost. The server is
+/// the source of truth; this client only decodes its responses into the
+/// Codable models defined in Models.swift. None of these methods touch the
+/// microphone or the file system — they marshal requests and parse replies.
 struct BackendClient {
     var base: URL
     var session: URLSession = .shared

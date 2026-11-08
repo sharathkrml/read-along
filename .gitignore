@@ -10,3 +10,6 @@ macapp/AppIcon.png
 
 .DS_Store
 *.png
+
+# pi coding agent skill library (not part of the app)
+.agents/

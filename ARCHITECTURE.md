@@ -99,34 +99,71 @@ crosses a PDF page, Original and Split follow the page change.
 ## 2. Repository layout
 
 ```
-readalong/
-  readalong.py        one file: OCR, model, aligner, speech, HTTP server, HTML
-  test_align.py       assert-based checks for the aligner and model
-  requirements.txt
-  README.md
-  ocr.jpg             the handwritten sample
-  ocr.pdf             the 4-page text PDF sample
-  ocr-higlighted.jpg  the original hand-drawn style reference (unused by the app)
-  fermion_main.py     entry point for the bundled fermion CLI
-  macapp/
-    main.swift        native WKWebView shell, backend lifecycle, menus
-    Info.plist        bundle identity, mic usage string, local-network ATS
-    AppIcon.icns
-  Makefile            make app / dmg / run / test / clean shortcuts
+read-along/                         repository root
+  README.md                         user-facing guide (install, build, use)
+  ARCHITECTURE.md                   backend pipeline, data model, HTTP API, limits
+  TODO.md                           remaining work and acceptance criteria
+  Makefile                          make app / dmg / run / test / clean shortcuts
+  requirements.txt                  dev dependencies (pip)
+  scripts/requirements.lock.txt     pinned packages baked into the .app
+  readalong.py                      thin executable shim -> readalong.__main__
+  fermion_main.py                   bundled fermion CLI entry point (MLX speech)
+  readalong/                        Python backend package (see MODULE_MAP.md)
+    __main__.py                     CLI parsing, HTTP server, startup/shutdown
+    _config.py                      paths, models, ports, error classes
+    app.py                          App: session, OCR jobs, alignment state
+    aligner.py                      ASR-to-script fuzzy alignment
+    audio_server.py                 PCM relay from the Swift mic layer
+    cache.py                        per-page OCR cache and word-box attachment
+    export.py                       page proof / highlight JPEG export
+    library.py                      DocumentStore: library.json + workspaces
+    mapping.py                      OCR-line to Vision-box mapping
+    models.py                       speech + handwriting model downloads
+    ocr.py                          LFM3-VL OCR with Vision fallback
+    pdf.py                          PDF ingestion (text layer + scanned)
+    segment.py                      handwriting ink-gap word segmentation
+    speech.py                       fermion ASR client + mic device list
+    text_model.py                   norm + readable presentation blocks
+    vision.py                       macOS Vision line boxes + reading order
+    web.py                          ThreadingHTTPServer API for the Swift UI
+    MODULE_MAP.md                   module responsibility map
+  macapp/                           native SwiftUI + AppKit shell
+    ReadAlongApp.swift              app entry, menu bar, keyboard shortcuts
+    BackendService.swift            bundled Python process lifecycle
+    BackendClient.swift             HTTP client to the Python backend
+    Models.swift                    Codable mirrors of the backend JSON
+    ReaderModel.swift               UI state: library, reader, follow mode
+    ReaderTextView.swift            native NSTextView reading pane + highlights
+    ReaderTheme.swift               studio palette + controls
+    ReadingSession.swift            enums, prefs, viewer/transport state
+    ContentView.swift               window shell, title bar, sidebar, workspace
+    PageView.swift                  source (PDF/image) pane with amber/blue boxes
+    PlayerBar.swift                 transport + live strip + mic menu
+    PresentView.swift               full-screen Focus stage
+    SetupCard.swift                 optional model setup card
+    SettingsView.swift              preferences (reading, voice, appearance, models)
+    SidebarView.swift               document library sidebar
+    SourceViewer.swift              PDF + image source viewers + toolbar
+    TextPanel.swift                 left-hand reading text panel
+    UnifiedReaderView.swift         single-scrollbar unified reader
+    EditSheet.swift                 per-page OCR correction sheet
+    AudioCapture.swift              mic capture -> WebSocket to ASR
+    Info.plist                      bundle ID, mic usage string, min macOS 14
+    ReadAlong.entitlements          audio-input entitlement
+    AppIcon.icns                    app icon
   scripts/
-    build_app.sh      build ReadAlong.app (Python runtime + packages + binary)
-    build_dmg.sh      build the distributable .dmg
-    make_icon.py      regenerate the icon
-    requirements.lock.txt
-  data/               generated workspace (gitignored; dev only)
-    current.jpg       image source, if the current document is an image
-    current.pdf       PDF source, if the current document is a PDF
-    pages/
-      p000.jpg|png    rendered page images
-      p001.png
-      ...
-    cache.json        version-3 document cache
-    asr.log           speech server log
+    build_app.sh                    build ReadAlong.app (runtime + deps + binary)
+    build_dmg.sh                    build the distributable .dmg
+    make_icon.py                    regenerate the icon
+    test_native.sh                  native Swift fixture checks
+  tests/
+    test_align.py                   aligner + text model assert checks
+    test_library.py                 document store + cache checks
+  data/                             generated workspace (gitignored; dev only)
+    current.jpg | current.pdf       the active source
+    pages/                          rendered page images
+    cache.json                      version-4 document cache
+    asr.log                         speech server log
 ```
 
 `data/` is disposable. Delete it and the app re-processes the source. The

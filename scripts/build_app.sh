@@ -56,10 +56,12 @@ plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Inf
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP/Contents/Info.plist"
 cp "$ROOT/macapp/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
-cp "$ROOT/readalong.py" "$ROOT/fermion_main.py" "$ROOT/ocr.jpg" "$APP/Contents/Resources/backend/"
+cp "$ROOT/readalong.py" "$ROOT/fermion_main.py" "$APP/Contents/Resources/backend/"
 # The readalong package (split modules) must sit next to the entry shim so the
 # shim's `from readalong.__main__ import main` resolves inside the bundle.
 cp -R "$ROOT/readalong" "$APP/Contents/Resources/backend/"
+# Bundled sample document served at GET /sample. ocr-pdf.pdf is the text PDF;
+# ocr.jpg (a handwriting scan) was a dev scratch image and is not shipped.
 [ -f "$ROOT/ocr.pdf" ] && cp "$ROOT/ocr.pdf" "$APP/Contents/Resources/backend/"
 [ ! -f "$ROOT/ocr.pdf" ] && [ -f "$ROOT/ocr-pdf.pdf" ] && cp "$ROOT/ocr-pdf.pdf" "$APP/Contents/Resources/backend/"
 clone "$PY_PREFIX" "$APP/Contents/Resources/backend/python"
