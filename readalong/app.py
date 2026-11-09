@@ -29,6 +29,7 @@ from .library import DocumentStore
 from .models import Models
 from .pdf import process_source
 from .speech import ASR, list_mics
+from .text import TEXT_SUFFIXES, decode_text
 from .text_model import build_pages_model, group_at, group_boxes, norm_text, rebase_position
 
 
@@ -538,6 +539,22 @@ class App:
         is_pdf = name.lower().endswith(".pdf") or data[:5] == b"%PDF-"
         if is_pdf and data[:5] != b"%PDF-":
             raise ValueError("This is not a valid PDF")
+        if name.lower().endswith(tuple(TEXT_SUFFIXES)):
+            text = decode_text(data)
+            doc = self.documents.create(name or "Untitled document", Path(name).suffix)
+            source = self.documents.source(doc["id"])
+            try:
+                source.write_text(text, encoding="utf-8")
+                model, pages = process_source(source)
+            except Exception as e:
+                self.documents.delete(doc["id"])
+                raise ValueError(f"The text file could not be read: {e}") from e
+            # Text layout is local and instant; publish it ready in one step
+            # instead of leaving a job the source viewer would race.
+            self.documents.update(doc["id"], status="ready", total=len(model["words"]),
+                                  pages=len(model["pages"]))
+            self.open_document(doc["id"])
+            return dict(self.documents.get(doc["id"]))
         doc = self.documents.create(name or "Untitled document", ".pdf" if is_pdf else ".jpg")
         source = self.documents.source(doc["id"])
         try:
@@ -548,7 +565,7 @@ class App:
                     image.convert("RGB").save(source, "JPEG", quality=95)
         except Exception:
             self.documents.delete(doc["id"])
-            raise ValueError("Choose a valid PDF, JPG, PNG, or WebP file")
+            raise ValueError("Choose a valid PDF, text, Markdown, JPG, PNG, or WebP file")
         self.open_document(doc["id"])
         self.start_ocr(fast=mode == "fast", auto=mode == "auto", doc_id=doc["id"])
         return dict(doc)

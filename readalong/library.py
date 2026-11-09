@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image
 
 from ._config import DATA
+from .text import TEXT_SUFFIXES
 
 
 class DocumentStore:
@@ -78,9 +79,11 @@ class DocumentStore:
             return
         legacy_pdf = self.data / "current.pdf"
         legacy_image = self.data / "current.jpg"
+        legacy_text = next((self.data / ("current" + s) for s in sorted(TEXT_SUFFIXES)
+                            if (self.data / ("current" + s)).exists()), None)
         legacy_cache = self.data / "cache.json"
         legacy_pages = self.data / "pages"
-        source = legacy_pdf if legacy_pdf.exists() else legacy_image if legacy_image.exists() else None
+        source = next((p for p in (legacy_pdf, legacy_image, legacy_text) if p and p.exists()), None)
         if not source:
             return
         doc = self.create(source.name, source.suffix)
@@ -89,17 +92,24 @@ class DocumentStore:
         if legacy_cache.exists():
             shutil.copy2(legacy_cache, target / "cache.json")
             doc["status"] = "ready"
+        if source.suffix.lower() in TEXT_SUFFIXES:
+            # --ocr-only leaves the generated viewer PDF as current.<ext>.pdf.
+            generated = source.with_name(source.name + ".pdf")
+            if generated.exists():
+                shutil.copy2(generated, target / "source.pdf")
         if legacy_pages.exists():
             shutil.copytree(legacy_pages, target / "pages", dirs_exist_ok=True)
         self._save()
 
     def create(self, file_name: str, suffix: str) -> dict:
         title = Path(file_name).stem.replace("_", " ").replace("-", " ").strip() or "Untitled document"
+        suffix = suffix.lower()
         doc = {
             "id": uuid.uuid4().hex,
             "title": title[:100],
             "file_name": Path(file_name).name or "Document",
-            "source": "source.pdf" if suffix.lower() == ".pdf" else "source.jpg",
+            "source": ("source" + suffix if suffix in TEXT_SUFFIXES
+                       else "source.pdf" if suffix == ".pdf" else "source.jpg"),
             "status": "idle",
             "error": "",
             "created": time.time(),
@@ -129,7 +139,7 @@ class DocumentStore:
     def source(self, doc_id: str) -> Path:
         workspace = self.path(doc_id)
         name = self.get(doc_id)["source"]
-        if name not in ("source.pdf", "source.jpg"):
+        if name not in ("source.pdf", "source.jpg") + tuple("source" + s for s in TEXT_SUFFIXES):
             raise ValueError("Invalid managed source")
         source = workspace / name
         if not source.resolve().is_relative_to(workspace.resolve()):

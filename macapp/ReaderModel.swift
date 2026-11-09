@@ -561,7 +561,8 @@ final class ReaderModel: ObservableObject {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.pdf, .image]
+        panel.allowedContentTypes = [.pdf, .image, .plainText]
+            + ["md", "markdown"].compactMap { UTType(filenameExtension: $0) }
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
             Task { @MainActor in await self.importFile(at: url) }

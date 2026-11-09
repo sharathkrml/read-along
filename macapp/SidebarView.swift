@@ -135,7 +135,7 @@ struct SidebarView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
             .buttonStyle(.plain)
-            .help("Import one PDF, JPEG, or PNG, up to 25 MB (⌘O)")
+            .help("Import one PDF, text, Markdown, JPEG, or PNG, up to 25 MB (⌘O)")
         }
         .padding(10)
     }

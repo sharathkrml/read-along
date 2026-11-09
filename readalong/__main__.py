@@ -21,6 +21,7 @@ from ._config import CACHE, DATA, IMAGE, PDF, WEB_PORT
 from .app import App, _startup
 from .library import DocumentStore
 from .pdf import process_source
+from .text import TEXT_SUFFIXES
 from .vision import VISION_HELPER_ARG, _vision_helper_main
 from . import web
 
@@ -30,8 +31,8 @@ APP = web.APP  # module-level alias used by atexit/signal handlers
 def main() -> None:
     if len(sys.argv) > 2 and sys.argv[1] == VISION_HELPER_ARG:
         raise SystemExit(_vision_helper_main(sys.argv[2:]))
-    ap = argparse.ArgumentParser(description="OCR a page or PDF and read along with it.")
-    ap.add_argument("--image", help="image or PDF to open (copied into data/)")
+    ap = argparse.ArgumentParser(description="Read along with a PDF, text file, Markdown, or image.")
+    ap.add_argument("--image", help="image, PDF, or text/Markdown file to open (copied into data/)")
     ap.add_argument("--port", type=int, default=WEB_PORT)
     ap.add_argument("--no-asr", action="store_true", help="don't start the speech server")
     ap.add_argument("--ocr-only", action="store_true", help="run OCR, print, and exit")
@@ -49,12 +50,16 @@ def main() -> None:
         if not src.exists():
             sys.exit(f"no such file: {src}")
         is_pdf = src.suffix.lower() == ".pdf"
-        source = PDF if is_pdf else IMAGE
+        is_text = src.suffix.lower() in TEXT_SUFFIXES
+        source = (PDF if is_pdf else DATA / ("current" + src.suffix.lower()) if is_text
+                  else IMAGE)
         shutil.copy(src, source)
-        try:
-            (IMAGE if is_pdf else PDF).unlink()
-        except FileNotFoundError:
-            pass
+        for other in (PDF, IMAGE, *(DATA / ("current" + s) for s in TEXT_SUFFIXES)):
+            if other != source:
+                try:
+                    other.unlink()
+                except FileNotFoundError:
+                    pass
         try:
             CACHE.unlink()
         except FileNotFoundError:
@@ -63,17 +68,20 @@ def main() -> None:
         src = Path(args.image).expanduser()
         if not src.exists():
             sys.exit(f"no such file: {src}")
-        source = PDF if src.suffix.lower() == ".pdf" else IMAGE
+        source = (PDF if src.suffix.lower() == ".pdf"
+                  else DATA / ("current" + src.suffix.lower()) if src.suffix.lower() in TEXT_SUFFIXES
+                  else IMAGE)
     elif PDF.exists():
         source = PDF
     elif IMAGE.exists():
         source = IMAGE
     else:
-        source = None
+        source = next((DATA / ("current" + s) for s in TEXT_SUFFIXES
+                       if (DATA / ("current" + s)).exists()), None)
 
     if args.ocr_only:
         if source is None:
-            sys.exit("no image or PDF to OCR")
+            sys.exit("no PDF, text file, or image to read")
         model, pages = process_source(source, fast=args.fast, auto=args.auto)
         for i, page in enumerate(pages):
             print(f"\n--- page {i + 1} ({len(page['lines'])} lines) ---")
@@ -87,7 +95,7 @@ def main() -> None:
     if args.image and library_exists and src is not None:
         doc = documents.create(src.name, src.suffix)
         target = documents.source(doc["id"])
-        if src.suffix.lower() == ".pdf":
+        if src.suffix.lower() == ".pdf" or src.suffix.lower() in TEXT_SUFFIXES:
             shutil.copy2(src, target)
         else:
             from PIL import Image

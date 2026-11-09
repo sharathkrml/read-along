@@ -101,9 +101,10 @@ make lock
 
 ## Use
 
-**Library** — import a PDF or image from the sidebar, or drop it anywhere in
-the window (one file at a time, up to 25 MB). Documents keep their own source,
-reading cache, and saved position. Use the row menu to rename or delete one.
+**Library** — import a PDF, plain text, Markdown, or image from the sidebar, or
+drop it anywhere in the window (one file at a time, up to 25 MB). Documents
+keep their own source, reading cache, and saved position. Use the row menu to
+rename or delete one.
 
 **Views** — *Text* reflows the recovered words, *Original* shows the real
 source page with current/next boxes, and *Split* keeps both in sync. Click any
@@ -135,9 +136,10 @@ phrase, arrow keys browse source pages only when the source canvas owns input,
 
 1. **PDFs with a text layer** are read directly with PyMuPDF: the words and
    their exact boxes come from the file, so there is no OCR step and no wait.
-   **Scanned PDFs and images** go through LFM3-VL, macOS Vision line boxes, and
-   an ink-gap word segmenter. A PDF of image-only pages is rendered once and
-   OCR'd page by page with a single model load.
+   **Text and Markdown files** are laid out into a paged PDF beside the source,
+   then read the same way. **Scanned PDFs and images** go through LFM3-VL,
+   macOS Vision line boxes, and an ink-gap word segmenter. A PDF of image-only
+   pages is rendered once and OCR'd page by page with a single model load.
 2. `fermion serve phonon-2.5-en` streams partial transcripts over a local
    WebSocket.
 3. A monotonic fuzzy alignment moves the cursor through the script. It only
@@ -158,7 +160,7 @@ guide to porting this POC to a native Mac app.
 | Backend | Python 3.12, ThreadingHTTPServer, WebSocket (mic relay) |
 | Speech | Phonon-2.5 English via fermion (MLX), partial transcripts over WebSocket |
 | OCR | LFM3-VL 2B (MLX) for handwriting, macOS Vision for print + line boxes |
-| PDF | PyMuPDF (text layer) + inline page rendering (scanned) |
+| PDF | PyMuPDF (text layer) + inline page rendering (scanned); text/Markdown layout |
 | Packaging | bundled CPython runtime, `uv pip` site-packages, ad-hoc signed `.app` + DMG |
 
 ---

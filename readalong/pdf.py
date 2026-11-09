@@ -1,8 +1,9 @@
-"""Read Along — PDF and image ingestion.
+"""Read Along — PDF, image, and text ingestion.
 
 PDFs with a text layer are read directly with PyMuPDF (exact word boxes, no
 OCR). Scanned PDFs and images go through LFM3-VL, macOS Vision line boxes, and
 the ink-gap word segmenter, one page at a time with a single model load.
+Text and Markdown are laid out into an internal text PDF first (see ``text``).
 `process_source` ties ingestion, word-box attachment, and caching together.
 """
 
@@ -18,6 +19,7 @@ from PIL import Image, ImageOps
 from ._config import DATA, LockedPDFError
 from .cache import attach_word_boxes, clear_pages, save_cache
 from .ocr import run_ocr_many
+from .text import TEXT_SUFFIXES, text_to_pdf
 from .text_model import build_pages_model, norm_text
 from .vision import reading_order
 
@@ -70,7 +72,8 @@ def pdf_lines(words: list, page_w: float, page_h: float) -> list[dict]:
     return reading_order(lines, lambda line: line["box"])
 
 
-def pdf_pages(path: Path, progress=None, fast: bool = False, phase=None, on_page=None, auto: bool = False) -> list[dict]:
+def pdf_pages(path: Path, progress=None, fast: bool = False, phase=None, on_page=None, auto: bool = False,
+              force_text: bool = False) -> list[dict]:
     import pymupdf
 
     pages_dir = path.parent / "pages"
@@ -93,7 +96,9 @@ def pdf_pages(path: Path, progress=None, fast: bool = False, phase=None, on_page
                 img = pages_dir / f"p{i:03d}.png"
                 pix.save(img)
                 words = page.get_text("words")
-                has_text = len(words) >= 10
+                # Generated text pages are short: trust any text layer, not the
+                # 10-word threshold that rejects junk text in scanned PDFs.
+                has_text = bool(words) if force_text else len(words) >= 10
                 lines = pdf_lines(words, page.rect.width, page.rect.height) if has_text else []
                 out.append((i, img, pix.width, pix.height, lines, has_text))
             return out
@@ -177,7 +182,11 @@ def image_pages(path: Path, progress=None, fast: bool = False, phase=None, on_pa
 
 
 def process_source(path: Path, progress=None, fast: bool = False, phase=None, on_page=None, auto: bool = False) -> tuple[dict, list[dict]]:
-    if path.suffix.lower() == ".pdf":
+    suffix = path.suffix.lower()
+    if suffix in TEXT_SUFFIXES:
+        pages = pdf_pages(text_to_pdf(path), progress, fast=fast, phase=phase,
+                          on_page=on_page, auto=auto, force_text=True)
+    elif suffix == ".pdf":
         pages = pdf_pages(path, progress, fast=fast, phase=phase, on_page=on_page, auto=auto)
     else:
         pages = image_pages(path, progress, fast=fast, phase=phase, on_page=on_page, auto=auto)

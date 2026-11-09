@@ -1,5 +1,5 @@
-"""Read Along — OCR a handwritten page or PDF, then highlight the words on the
-source page while you read it aloud.
+"""Read Along — read a handwritten page, PDF, text file, or Markdown, then
+highlight the words on the source page while you read it aloud.
 
 The implementation is split into domain modules (see ``MODULE_MAP.md``). This
 package's public API is re-exported below so the file layout stays decoupled
@@ -37,6 +37,7 @@ from .segment import segment_line  # noqa: F401
 from .ocr import ocr_lfm3, ocr_lfm3_many, run_ocr, run_ocr_many  # noqa: F401
 from .pdf import image_pages, pdf_pages, pdf_lines, process_source  # noqa: F401
 from .cache import attach_word_boxes, clear_pages, load_cache, save_cache  # noqa: F401
+from .text import TEXT_SUFFIXES, decode_text, text_to_pdf  # noqa: F401
 
 # --- speech / models / library -------------------------------------------
 from .speech import ASR, fermion_cmd, list_mics, tail  # noqa: F401
@@ -58,6 +59,7 @@ __all__ = [
     "map_lines", "norm_token", "norm_text", "ocr_lfm3", "ocr_lfm3_many",
     "pdf_lines", "pdf_pages", "process_source", "reading_order",
     "rebase_position", "save_cache", "segment_line", "tail", "tokenize",
+    "TEXT_SUFFIXES", "decode_text", "text_to_pdf",
     "usable_lines", "vision_lines",
 ]
 

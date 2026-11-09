@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from .app import App
 from ._config import ROOT
 from .export import export_image
+from .text import TEXT_SUFFIXES
 
 APP: App | None = None
 
@@ -69,10 +70,19 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     self._send(404, b"source unavailable", "text/plain")
                     return
+                suffix = src.suffix.lower()
+                if suffix in TEXT_SUFFIXES:
+                    # Text sources are laid out as an internal PDF so the
+                    # original pane can show real pages with highlights.
+                    src = src.with_name("source.pdf")
+                    ctype = "application/pdf"
+                elif suffix == ".pdf":
+                    ctype = "application/pdf"
+                else:
+                    ctype = "image/jpeg"
                 if not src.exists():
                     self._send(404, b"source unavailable", "text/plain")
                     return
-                ctype = "application/pdf" if src.suffix.lower() == ".pdf" else "image/jpeg"
                 self._send(200, src.read_bytes(), ctype)
             elif p == "/model":
                 self._json(APP.model_snapshot())

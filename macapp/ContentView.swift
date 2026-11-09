@@ -57,7 +57,7 @@ struct ContentView: View {
             Button("Choose a file…") { model.importDocument() }
             Button("Cancel", role: .cancel) { dropError = nil }
         } message: {
-            Text(dropError ?? "Choose one PDF, JPEG, or PNG at a time.")
+            Text(dropError ?? "Choose one PDF, text, Markdown, JPEG, or PNG at a time.")
         }
         .overlay {
             if dropTargeted {
@@ -71,7 +71,7 @@ struct ContentView: View {
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard urls.count == 1, let url = urls.first else {
-                dropError = "Choose one file at a time. Read Along imports a single PDF, JPEG, or PNG, up to 25 MB."
+                dropError = "Choose one file at a time. Read Along imports a single PDF, text, Markdown, JPEG, or PNG, up to 25 MB."
                 return false
             }
             Task { await model.importFile(at: url) }
@@ -554,7 +554,7 @@ struct PlaceholderView: View {
                                 .accessibilityAddTraits(.isHeader)
                                 .padding(.bottom, 18)
 
-                            Text("Open a PDF or a photo. Listen with a moving reading guide, or read aloud and let the guide follow your voice.")
+                            Text("Open a PDF, a text file, or a photo. Listen with a moving reading guide, or read aloud and let the guide follow your voice.")
                                 .font(.system(size: 14))
                                 .foregroundStyle(ReaderTheme.secondaryText)
                                 .lineSpacing(5)
@@ -567,14 +567,14 @@ struct PlaceholderView: View {
                                 }
                                 .buttonStyle(StudioPrimaryButtonStyle())
                                 .focused($importFocused)
-                                .help("Choose a PDF, JPEG, or PNG (⌘O)")
+                                .help("Choose a PDF, text, Markdown, JPEG, or PNG (⌘O)")
 
                                 Button("Try a sample") { Task { await model.importSample() } }
                                     .buttonStyle(StudioSecondaryButtonStyle())
                             }
                             .padding(.bottom, 14)
 
-                            Text("PDF, JPEG, or PNG  ·  Up to 25 MB")
+                            Text("PDF, text, Markdown, JPEG, or PNG  ·  Up to 25 MB")
                                 .font(.system(size: 11))
                                 .foregroundStyle(ReaderTheme.tertiaryText)
                                 .padding(.bottom, 30)

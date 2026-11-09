@@ -80,7 +80,13 @@ def load_cache(path: Path) -> dict | None:
 
 def attach_word_boxes(model: dict, workspace: Path = DATA) -> None:
     """Fill word boxes for every line that did not get exact boxes from a PDF."""
+    # Exact lines (a text PDF, or a generated text/Markdown page) need no ink
+    # segmentation; skipping their pages avoids decoding every page image.
+    pending = {line["page"] for line in model["lines"]
+               if not line.get("exact") and line.get("box")}
     for pi, page in enumerate(model["pages"]):
+        if pi not in pending:
+            continue
         path = workspace / "pages" / page["image"]
         if not path.exists():
             continue
