@@ -414,11 +414,11 @@ struct RenameSheet: View {
             name = doc.title
             nameFocused = true
         }
-        .onChange(of: model.pendingRename) { pending in
-            if pending == nil { dismiss() }
+        .onChange(of: model.pendingRename) {
+            if model.pendingRename == nil { dismiss() }
         }
-        .onChange(of: model.operationError) { message in
-            guard saving, let message else { return }
+        .onChange(of: model.operationError) {
+            guard saving, let message = model.operationError else { return }
             error = message
             saving = false
         }

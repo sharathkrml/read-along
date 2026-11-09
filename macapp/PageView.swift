@@ -172,7 +172,7 @@ struct PageView: View {
             ScrollView([.vertical, .horizontal]) {
                 SpacedPageView()
             }
-            .onChange(of: model.highlightIdentity) { _ in
+            .onChange(of: model.highlightIdentity) {
                 Task { @MainActor in
                     withAnimation(.smooth(duration: 0.2)) {
                         proxy.scrollTo("anchor-current", anchor: .center)

@@ -22,7 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Reader-context keys only. A menu key equivalent would also steal
         // spaces and brackets while the user is typing in search or the editor.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            MainActor.assumeIsolated { Self.handleReaderKey(event) }
+            @MainActor func handler(_ e: NSEvent) -> NSEvent? {
+                Self.handleReaderKey(e)
+            }
+            return handler(event)
         }
         // Arrow keys stay with the source pane until the user clicks elsewhere.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in

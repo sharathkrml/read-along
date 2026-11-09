@@ -202,7 +202,7 @@ struct PlayerBar: View {
                     ))
                 }
             }
-            if let id = model.selectedMicID, model.selectedMicrophone == nil {
+            if let _ = model.selectedMicID, model.selectedMicrophone == nil {
                 Divider()
                 Button("Saved microphone unavailable") { }
                     .disabled(true)
