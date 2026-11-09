@@ -91,6 +91,14 @@ enum ReadingMath {
         return min(1, max(0, Double(position) / Double(total)))
     }
 
+    /// Live progress is only trusted while the loaded model belongs to the
+    /// document on screen; during a switch, use the library's saved position.
+    static func progress(live: Bool, position: Int, total: Int,
+                         savedPosition: Int, savedTotal: Int) -> Double {
+        if live { return progress(position: position, total: total) }
+        return progress(position: savedPosition, total: savedTotal)
+    }
+
     static func anchor(documentID: String, position: Int, words: [Word]) -> PageWordAnchor? {
         guard !words.isEmpty else { return nil }
         let position = min(words.count, max(0, position))

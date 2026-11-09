@@ -128,8 +128,18 @@ class App:
 
     def _publish_model(self, model: dict, pages: list[dict]) -> None:
         old_pos = self.aligner.pos if self.aligner else 0
+        if not self.aligner and self.documents and self.doc_id:
+            try:
+                old_pos = int(self.documents.get(self.doc_id).get("position", 0))
+            except ValueError:
+                old_pos = 0
         old_conf = self.aligner.conf if self.aligner else 0.0
-        pos = rebase_position(self.model, model, old_pos)
+        if not self.model or not self.model.get("words"):
+            # A rebuild with no loaded model (first OCR, expired cache) must
+            # keep the library's saved place instead of writing zero.
+            pos = min(old_pos, len(model["words"]))
+        else:
+            pos = rebase_position(self.model, model, old_pos)
         if self.model != model:
             self.model_revision += 1
         self.model = model
@@ -170,45 +180,77 @@ class App:
             self.last_position_write = now
 
     def library(self) -> dict:
-        if not self.documents:
-            return {"active": None, "documents": []}
-        payload = self.documents.public()
-        for doc in payload["documents"]:
-            job = self.jobs.get(doc["id"])
-            doc.update({
-                "ocr_done": job["done"] if job else 0,
-                "ocr_total": job["total"] if job else 0,
-                "ocr_phase": job["phase"] if job else "",
-            })
-        return payload
+        with self.lock:
+            if not self.documents:
+                return {"active": None, "documents": []}
+            payload = self.documents.public()
+            for doc in payload["documents"]:
+                job = self.jobs.get(doc["id"])
+                doc.update({
+                    "ocr_done": job["done"] if job else 0,
+                    "ocr_total": job["total"] if job else 0,
+                    "ocr_phase": job["phase"] if job else "",
+                })
+            return payload
 
-    def load(self) -> bool:
-        if not self.source_path:
+    def load(self, doc_id: str | None = None) -> bool:
+        """Load a document's saved workspace.
+
+        The model, pages, aligner, and doc id are built first and swapped in
+        together, so /state, /model, and /library never expose a half-opened
+        document (new id with an empty model or a zero position).
+        """
+        target = doc_id or self.doc_id
+        source = self.source_path
+        doc = None
+        if self.documents and target:
+            source = self.documents.source(target)
+            doc = self.documents.get(target)
+        if not source:
             return False
-        d = load_cache(self.source_path)
-        if not d:
-            self._mirror_job()
-            return False
-        self.pages = d["pages"]
-        model = build_pages_model(self.pages)
-        attach_word_boxes(model, self.source_path.parent)
-        if not model["words"]:
-            return False
+        d = load_cache(source)
+        pages = d["pages"] if d else None
+        model = None
+        aligner = None
         saved_pos = 0
-        if self.documents and self.doc_id:
-            doc = self.documents.get(self.doc_id)
-            saved_pos = min(int(doc.get("position", 0)), len(model["words"]))
-        self._publish_model(model, self.pages)
-        self.aligner.pos = max(0, saved_pos)
-        if self.documents and self.doc_id:
-            self.documents.update(self.doc_id, total=len(model["words"]), pages=len(model["pages"]))
-            if self._job_key() not in self.jobs:
-                self.ocr_status = "done" if doc.get("status") == "ready" else doc.get("status", "idle")
-                self.ocr_error = doc.get("error", "")
-        else:
-            self.ocr_status = "done"
+        if pages:
+            model = build_pages_model(pages)
+            attach_word_boxes(model, source.parent)
+            if model["words"]:
+                if doc:
+                    saved_pos = min(int(doc.get("position", 0)), len(model["words"]))
+                aligner = Aligner([w["norm"] for w in model["words"]])
+                aligner.pos = max(0, saved_pos)
+            else:
+                model = None
+        with self.lock:
+            if self.documents and target:
+                self.documents.open(target)
+                if model:
+                    self.documents.update(
+                        target, position=saved_pos,
+                        total=len(model["words"]), pages=len(model["pages"]),
+                    )
+            if self.doc_id != target or self.model != model:
+                self.model_revision += 1
+            self.doc_id = target
+            self.source_path = source
+            self.model = model
+            self.pages = pages if model else None
+            self.aligner = aligner
+            self.partial = ""
+            self.error = ""
+            self.ocr_status = "done" if (doc or {}).get("status") == "ready" else (doc or {}).get("status", "idle")
+            self.ocr_error = (doc or {}).get("error", "")
+            self.ocr_done = 0
+            self.ocr_total = 0
+            self.ocr_phase = ""
+            self.last_position_write = 0
+        if not self.documents:
+            with self.lock:
+                self.ocr_status = "done"
         self._mirror_job()
-        return True
+        return bool(model)
 
     def _begin_ocr(self, doc_id: str | None = None) -> int:
         with self.lock:
@@ -473,25 +515,11 @@ class App:
         if not self.documents:
             raise ValueError("Document library is unavailable")
         self.stop()
-        doc = self.documents.open(doc_id)
-        with self.lock:
-            self.doc_id = doc_id
-            self.source_path = self.documents.source(doc_id)
-            self.model = None
-            self.pages = None
-            self.aligner = None
-            self.partial = ""
-            self.error = ""
-            self.ocr_status = "done" if doc.get("status") == "ready" else doc.get("status", "idle")
-            self.ocr_error = doc.get("error", "")
-            self.ocr_done = 0
-            self.ocr_total = 0
-            self.ocr_phase = ""
-            self.last_position_write = 0
-        loaded = self.load()
+        doc = self.documents.get(doc_id)
+        loaded = self.load(doc_id)
         if not loaded and doc.get("status") == "ready":
             self.start_ocr(doc_id=doc_id)
-        return doc
+        return self.documents.get(doc_id)
 
     def import_document(self, data_url: str, name: str = "", mode: str = "auto") -> dict:
         if not self.documents:

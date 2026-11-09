@@ -192,17 +192,26 @@ struct SidebarRow: View {
     @State private var hovered = false
 
     private var selected: Bool { model.library.active == doc.id }
+    private var opening: Bool { model.openingDocumentID == doc.id }
+    /// Live progress is only valid once the page model and backend state
+    /// both belong to this document. Before then, reuse the row's stored
+    /// position so a switch cannot flash the previous document's Done state.
+    private var live: Bool {
+        selected && model.pageModel.doc_id == doc.id && model.state.doc_id == doc.id
+            && model.state.model_ready != false
+    }
+    private var storedComplete: Bool {
+        doc.statusName == "ready" && doc.wordTotal > 0 && doc.wordPosition >= doc.wordTotal
+    }
     private var processing: Bool {
-        doc.statusName == "processing" || (selected && model.isProcessing)
+        doc.statusName == "processing" || (live && model.isProcessing)
     }
     private var failed: Bool { doc.statusName == "error" }
-    private var complete: Bool {
-        selected ? model.isComplete : doc.statusName == "ready" && doc.wordTotal > 0 && doc.wordPosition >= doc.wordTotal
-    }
+    private var complete: Bool { live ? model.isComplete : storedComplete }
     private var percent: Int {
         guard doc.wordTotal > 0 else { return 0 }
         if complete { return 100 }
-        return Int((selected ? model.progressPercent : ReadingMath.progress(position: doc.wordPosition, total: doc.wordTotal) * 100).rounded())
+        return Int((live ? model.progressPercent : ReadingMath.progress(position: doc.wordPosition, total: doc.wordTotal) * 100).rounded())
     }
 
     var body: some View {
@@ -277,7 +286,10 @@ struct SidebarRow: View {
     }
 
     @ViewBuilder private var trailing: some View {
-        if processing {
+        if opening {
+            ProgressView().controlSize(.mini)
+                .accessibilityLabel("Opening document")
+        } else if processing {
             ProgressView().controlSize(.mini)
                 .accessibilityLabel("Recovering text")
         } else if failed {
@@ -299,8 +311,8 @@ struct SidebarRow: View {
 
     private var metaText: String {
         if processing {
-            let total = (selected ? model.state.ocr_total : nil) ?? doc.ocr_total ?? 0
-            let done = (selected ? model.state.ocr_done : nil) ?? doc.ocr_done ?? 0
+            let total = (live ? model.state.ocr_total : nil) ?? doc.ocr_total ?? 0
+            let done = (live ? model.state.ocr_done : nil) ?? doc.ocr_done ?? 0
             return total > 0 ? "Recovering · \(min(total, max(0, done)))/\(total)" : "Preparing text…"
         }
         if failed { return "Text recovery needs attention" }

@@ -179,6 +179,12 @@ struct NativeChecks {
         checkEqual("progress complete", ReadingMath.progress(position: 10, total: 10), 1)
         checkEqual("progress clamps high", ReadingMath.progress(position: 15, total: 10), 1)
         checkEqual("progress clamps low", ReadingMath.progress(position: -5, total: 10), 0)
+        checkEqual("saved progress while switching",
+                   ReadingMath.progress(live: false, position: 9, total: 10, savedPosition: 3, savedTotal: 10), 0.3)
+        checkEqual("live progress when owned",
+                   ReadingMath.progress(live: true, position: 3, total: 10, savedPosition: 9, savedTotal: 10), 0.3)
+        checkEqual("saved progress with empty live model",
+                   ReadingMath.progress(live: false, position: 0, total: 0, savedPosition: 4, savedTotal: 4), 1)
 
         func word(_ text: String, _ page: Int) -> Word {
             Word(text: text, norm: text.lowercased(), page: page, line: page, box: nil)

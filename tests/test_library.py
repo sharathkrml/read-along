@@ -48,7 +48,35 @@ with tempfile.TemporaryDirectory(prefix="readalong-library-") as tmp:
     app.jump(1)
     app.open_document(second["id"])
     check("position restored", app.aligner.pos, 3)
+    check("position metadata restored", store.get(second["id"])["position"], 3)
     check("second text intact", app.model["words"][0]["text"], "five")
+
+    # Opening must restore the saved place in one write. An intermediate
+    # position=0 write is what flashed an invalid percentage in the app.
+    writes = []
+    original_update = DocumentStore.update
+
+    def tracking_update(self, doc_id, **fields):
+        if "position" in fields:
+            writes.append((doc_id, fields["position"]))
+        return original_update(self, doc_id, **fields)
+
+    DocumentStore.update = tracking_update
+    try:
+        app.open_document(first["id"])
+    finally:
+        DocumentStore.update = original_update
+    check("no zero-position writes during open", [w for w in writes if w[1] == 0], [])
+    check("open writes the saved position once",
+          [w for w in writes if w[0] == first["id"]], [(first["id"], 1)])
+
+    # A rebuild with no loaded model (first OCR or an expired cache) must keep
+    # the library's saved position instead of resetting it to zero.
+    kept_model = app.model
+    app.model = None
+    app.aligner = None
+    app._publish_model(kept_model, app.pages)
+    check("rebuild keeps the saved position", store.get(first["id"])["position"], 1)
 
     store.rename(first["id"], "  A   better title  ")
     check("rename normalized", store.get(first["id"])["title"], "A better title")

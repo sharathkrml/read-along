@@ -64,6 +64,8 @@ final class ReaderModel: ObservableObject {
     /// nil = split, .text = text only, .original = source only.
     @Published var expandedPane: ViewPane?
     @Published var documentLoadingMessage: String?
+    /// Document the user just clicked while its model is still loading.
+    @Published var openingDocumentID: String?
     @Published var operationError: String?
     @Published var sourceURL: URL?
     @Published var sourceData: Data?
@@ -304,7 +306,19 @@ final class ReaderModel: ObservableObject {
     }
 
     var progressPercent: Double {
-        let percent = ReadingMath.progress(position: cursor, total: wordsTotal) * 100
+        // Live progress is only valid while the loaded model and backend state
+        // both belong to the document on screen. During a switch, use the
+        // document's saved place instead of a half-loaded cursor.
+        let docID = library.active
+        let live = docID != nil && pageModel.doc_id == docID && state.doc_id == docID
+            && state.model_ready != false
+        let percent = ReadingMath.progress(
+            live: live,
+            position: cursor,
+            total: wordsTotal,
+            savedPosition: activeDoc?.wordPosition ?? 0,
+            savedTotal: activeDoc?.wordTotal ?? 0
+        ) * 100
         return isProcessing ? min(99, percent) : percent
     }
 
@@ -361,10 +375,11 @@ final class ReaderModel: ObservableObject {
     func flushForTermination() {
         guard let c = client, !pageModel.words.isEmpty else { return }
         let target = cursor
+        let docID = pageModel.doc_id
         let listening = state.status == "listening"
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            _ = try? await c.jump(word: target)
+            _ = try? await c.jump(word: target, docID: docID)
             if listening { _ = try? await c.stopFollow() }
             done.signal()
         }
@@ -378,7 +393,9 @@ final class ReaderModel: ObservableObject {
             let interval: UInt64 = !activeWindow ? 1_200_000_000 : (busy ? 120_000_000 : 400_000_000)
             try? await Task.sleep(nanoseconds: interval)
             guard let client, ready, !Task.isCancelled else { continue }
+            let generation = documentGeneration
             if let s = try? await client.state() {
+                guard generation == documentGeneration else { continue }
                 await applyState(s)
                 if Date().timeIntervalSince(libraryClock) > 1.0 {
                     libraryClock = Date()
@@ -388,21 +405,28 @@ final class ReaderModel: ObservableObject {
         }
     }
 
-    private func applyState(_ newState: ReaderState) async {
+    private func applyState(_ newState: ReaderState, refreshModel: Bool = true) async {
+        let generation = documentGeneration
         let previousDoc = state.doc_id
         let previousModelWords = state.model_words
         let previousModelPages = state.model_pages
         let previousRevision = state.model_revision
         if let docID = newState.doc_id, library.active != docID {
+            // A poll can see the server's new document before the open flow
+            // has loaded its model. Keep the old screen until the open swaps
+            // title, text, and progress together.
+            guard openTask == nil, pendingOpenID == nil, newState.model_ready != false else { return }
             library.active = docID
         }
-        if let pos = newState.pos {
+        if newState.model_ready != false, let pos = newState.pos {
             cursor = clamp(pos)
         }
-        if previousDoc != newState.doc_id || previousModelWords != newState.model_words
+        if refreshModel, pageModel.doc_id != newState.doc_id
+            || previousDoc != newState.doc_id || previousModelWords != newState.model_words
             || previousModelPages != newState.model_pages
             || previousRevision != newState.model_revision {
             await loadModel()
+            guard generation == documentGeneration else { return }
         }
         let listening = newState.status == "listening"
         if listening, let rms = newState.rms {
@@ -433,7 +457,9 @@ final class ReaderModel: ObservableObject {
 
     private func pollStateOnce() async {
         guard let client else { return }
+        let generation = documentGeneration
         if let s = try? await client.state() {
+            guard generation == documentGeneration else { return }
             await applyState(s)
         }
     }
@@ -448,7 +474,12 @@ final class ReaderModel: ObservableObject {
 
     func refreshLibrary(quiet: Bool = false) async {
         guard let client else { return }
+        // The open flow fetches its own library snapshot and applies it with
+        // the model. A poll must not move `active` ahead of the new model.
+        guard openTask == nil, pendingOpenID == nil else { return }
+        let generation = documentGeneration
         guard let payload = try? await client.library() else { return }
+        guard generation == documentGeneration else { return }
         let ids = payload.documents.map(\.id)
         let current = library.documents.map(\.id)
         if !quiet || ids != current || library.active != payload.active {
@@ -472,6 +503,8 @@ final class ReaderModel: ObservableObject {
             stopFollow()
         }
         pendingOpenID = id
+        openingDocumentID = id
+        documentGeneration += 1
         guard openTask == nil else { return }
         openTask = Task { [weak self] in
             await self?.drainOpenQueue()
@@ -484,10 +517,16 @@ final class ReaderModel: ObservableObject {
     private func drainOpenQueue() async {
         while let id = pendingOpenID {
             pendingOpenID = nil
+            guard let client else {
+                openingDocumentID = nil
+                break
+            }
+            let generation = documentGeneration
             do {
-                try await client?.openDocument(id: id)
+                try await client.openDocument(id: id)
             } catch {
                 if pendingOpenID == nil {
+                    openingDocumentID = nil
                     showToast(error.localizedDescription, isError: true)
                 }
                 continue
@@ -495,18 +534,27 @@ final class ReaderModel: ObservableObject {
             // A newer click arrived while the server was switching; let that
             // open win without flashing this intermediate document.
             guard pendingOpenID == nil else { continue }
+            // Fetch everything before touching the UI so title, text, and
+            // progress change in one frame instead of one per round-trip.
+            let model = try? await client.pageModel(docID: id)
+            let newState = try? await client.state()
+            let payload = try? await client.library()
+            guard generation == documentGeneration else { continue }
+            if let payload { library = payload }
             library.active = id
             viewer.browsedPage = nil
-            loadSource()
-            await refreshLibrary()
-            await loadModel()
-            await pollStateOnce()
+            // Never leave the previous document's text under the new title:
+            // if the model fetch failed, clear it and let the next poll retry.
+            applyModel(model ?? PageModel())
+            if let newState { await applyState(newState, refreshModel: false) }
+            if pendingOpenID == nil { openingDocumentID = nil }
             if let doc = activeDoc {
                 showToast("Opened “\(doc.title)”")
             }
             feedback(.navigation)
         }
         openTask = nil
+        if pendingOpenID == nil { openingDocumentID = nil }
     }
 
     func importDocument() {
@@ -637,10 +685,18 @@ final class ReaderModel: ObservableObject {
 
     private func loadModel() async {
         guard let client else { return }
+        let generation = documentGeneration
         guard let payload = try? await client.pageModel() else {
-            loadSource()
+            if generation == documentGeneration { loadSource() }
             return
         }
+        guard generation == documentGeneration else { return }
+        applyModel(payload)
+    }
+
+    /// Applies a fetched page model without any suspension, so callers can
+    /// swap title, text, and progress in one UI turn.
+    private func applyModel(_ payload: PageModel) {
         pageModel = payload
         modelRevision += 1
         contentRevision += 1
@@ -657,7 +713,17 @@ final class ReaderModel: ObservableObject {
             pageImage = nil
             pageImageKey = ""
         }
-        cursor = clamp(state.pos ?? cursor)
+        // The previous document's state must never move this document's
+        // cursor: clamping an old, larger position to a shorter document
+        // makes it briefly look complete until the next state poll. Use the
+        // loaded document's own saved position until its state arrives.
+        if state.doc_id == docID, state.model_ready != false, let pos = state.pos {
+            cursor = clamp(pos)
+        } else if let savedPosition = library.documents.first(where: { $0.id == docID })?.wordPosition {
+            cursor = clamp(savedPosition)
+        } else {
+            cursor = 0
+        }
         loadPageImage(force: true)
         loadSource()
     }
@@ -682,8 +748,11 @@ final class ReaderModel: ObservableObject {
         seekVersion += 1
         let v = seekVersion
         let client = self.client
+        // Scope the write to the document being read: a seek that lands after
+        // a switch must not move the newly opened document.
+        let docID = pageModel.doc_id
         Task { [weak self] in
-            _ = try? await client?.jump(word: word)
+            _ = try? await client?.jump(word: word, docID: docID)
             await MainActor.run { if self?.seekVersion == v { self?.acknowledgedSeekVersion = v } }
         }
     }
