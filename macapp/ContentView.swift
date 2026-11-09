@@ -498,8 +498,11 @@ struct DetailView: View {
     }
 
     private func syncPDFPage(_ oneBased: Int) {
-        if splitController.lastProgrammaticPage == oneBased {
-            splitController.lastProgrammaticPage = nil
+        // A programmatic follow can briefly report the old page before PDFKit
+        // finishes scrolling. Ignore those reports until the target arrives
+        // (followToPage clears a stale target after 750 ms).
+        if let target = splitController.lastProgrammaticPage {
+            if target == oneBased { splitController.lastProgrammaticPage = nil }
             return
         }
         let zeroBased = max(0, oneBased - 1)

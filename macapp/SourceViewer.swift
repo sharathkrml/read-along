@@ -50,29 +50,35 @@ final class PDFSourceController: ObservableObject, SourceControlling {
         guard viewer !== v else { return }
         viewer = v
         v.pdfView.controller = self
-        sync()
     }
 
     func sync() {
         guard let v = viewer, let doc = v.pdfView.document else { return }
-        totalPages = max(1, doc.pageCount)
+        // Publish only real changes. These properties are observed by SwiftUI;
+        // re-sending an identical value from inside a view update invalidates
+        // the platform view again and can spin the update graph forever.
+        let pages = max(1, doc.pageCount)
+        if totalPages != pages { totalPages = pages }
         // Prefer the dominant visible page over pdfView.currentPage:
         // in singlePageContinuous, scrolling the stacked pages does not
         // reliably advance currentPage, so the text mirror would stay
         // on page 1 while the user looks at page 2 or 3.
         let visible = visiblePageIndex(v: v, doc: doc)
+        var page = currentPage
         if let visible {
-            currentPage = visible + 1
+            page = visible + 1
         } else if let p = v.pdfView.currentPage {
-            currentPage = doc.index(for: p) + 1
+            page = doc.index(for: p) + 1
         }
+        if currentPage != page { currentPage = page }
         if let p = doc.page(at: max(0, currentPage - 1)) {
             // Report the zoom the user actually sees; PDFView.scaleFactor is not
             // always the on-screen point ratio while autoScales is active.
             let pageRect = p.bounds(for: .cropBox)
             let onScreen = v.pdfView.convert(pageRect, from: p)
             if pageRect.width > 0, onScreen.width > 0 {
-                zoomPercent = max(1, Int((onScreen.width / pageRect.width * 100).rounded()))
+                let zoom = max(1, Int((onScreen.width / pageRect.width * 100).rounded()))
+                if zoomPercent != zoom { zoomPercent = zoom }
             }
         }
     }
@@ -536,7 +542,6 @@ struct PDFSourceRepresentable: NSViewRepresentable {
     let data: Data
     @ObservedObject var controller: PDFSourceController
     var page: Int
-    var follows: Bool
     var currentBoxes: [[Double]]
     var nextBoxes: [[Double]]
 
@@ -552,9 +557,10 @@ struct PDFSourceRepresentable: NSViewRepresentable {
         if nsView.pdfView.document == nil { nsView.load(data: data) }
         nsView.controller = controller
         controller.attach(nsView)
-        if follows, controller.currentPage != page + 1 {
-            controller.followToPage(page + 1)
-        }
+        // Page following is driven by PageView's onChange handlers, never here:
+        // this method runs inside a SwiftUI update, and calling followToPage
+        // publishes controller state that schedules another update, which
+        // re-enters this method and hangs the app.
         nsView.applyHighlights(current: currentBoxes, next: nextBoxes, pageIndex: page)
     }
 }

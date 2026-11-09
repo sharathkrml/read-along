@@ -124,16 +124,16 @@ struct PageView: View {
                     data: data,
                     controller: controller,
                     page: model.displayPage,
-                    follows: model.viewer.sourceFollows,
                     currentBoxes: currentBoxes,
                     nextBoxes: nextBoxes
                 )
                 .id(model.library.active)
-            } else if NSImage(data: data) != nil {
+            } else {
+                // The import path validates and re-encodes every image, so it
+                // is safe to hand the bytes straight to the viewer instead of
+                // decoding a throwaway NSImage on every body evaluation.
                 ImageSourceRepresentable(data: data, controller: imageSourceController, currentBoxes: currentBoxes, nextBoxes: nextBoxes)
                     .id(model.library.active)
-            } else {
-                rasterFallback
             }
         } else {
             rasterFallback

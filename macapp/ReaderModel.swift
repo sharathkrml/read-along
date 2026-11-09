@@ -463,27 +463,50 @@ final class ReaderModel: ObservableObject {
     }
 
     func openDocument(_ id: String?) {
-        guard let id, id != library.active else { return }
+        guard let id else { return }
+        // A click on the current document only means something while another
+        // document is still being opened: the user is cancelling that switch.
+        if id == library.active, pendingOpenID == nil, openTask == nil { return }
+        if pendingOpenID == id { return }
         if state.status == "listening" || transportState == .listening || transportState == .preparing {
             stopFollow()
         }
-        Task {
+        pendingOpenID = id
+        guard openTask == nil else { return }
+        openTask = Task { [weak self] in
+            await self?.drainOpenQueue()
+        }
+    }
+
+    /// One server switch at a time: rapid clicks replace the pending document
+    /// instead of racing several opens, which left the UI and backend showing
+    /// different documents.
+    private func drainOpenQueue() async {
+        while let id = pendingOpenID {
+            pendingOpenID = nil
             do {
                 try await client?.openDocument(id: id)
-                library.active = id
-                viewer.browsedPage = nil
-                loadSource()
-                await refreshLibrary()
-                await loadModel()
-                await pollStateOnce()
-                if let doc = activeDoc {
-                    showToast("Opened “\(doc.title)”")
-                }
-                feedback(.navigation)
             } catch {
-                showToast(error.localizedDescription, isError: true)
+                if pendingOpenID == nil {
+                    showToast(error.localizedDescription, isError: true)
+                }
+                continue
             }
+            // A newer click arrived while the server was switching; let that
+            // open win without flashing this intermediate document.
+            guard pendingOpenID == nil else { continue }
+            library.active = id
+            viewer.browsedPage = nil
+            loadSource()
+            await refreshLibrary()
+            await loadModel()
+            await pollStateOnce()
+            if let doc = activeDoc {
+                showToast("Opened “\(doc.title)”")
+            }
+            feedback(.navigation)
         }
+        openTask = nil
     }
 
     func importDocument() {
@@ -628,6 +651,11 @@ final class ReaderModel: ObservableObject {
             pageImagesDocID = docID
             pageImages.removeAll()
             pageImageGeneration += 1
+            // Never leave the previous document's raster under the new title
+            // while its first page is fetched.
+            pageImageTask?.cancel()
+            pageImage = nil
+            pageImageKey = ""
         }
         cursor = clamp(state.pos ?? cursor)
         loadPageImage(force: true)
