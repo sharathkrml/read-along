@@ -95,6 +95,7 @@ struct TextPanel: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            .frame(minHeight: 52)
             if editing {
                 Rectangle().fill(ReaderTheme.hairline).frame(height: 3)
             } else {

@@ -372,14 +372,29 @@ class App:
             if not self._want_listen:
                 self._on_status("idle")
                 return
-            # Audio server was already started at app launch (__main__.py).
+            # Make sure the PCM relay is listening before opening the ASR stream,
+            # so Swift's captured audio has somewhere to go from the first frame.
+            self._start_audio_server()
             self.asr.start()
         except Exception as e:
             self._on_status("error", str(e))
 
     def _start_audio_server(self) -> None:
-        """Relay PCM captured by the Swift mic layer into the ASR queue."""
-        if self.audio_server is None:
+        """Relay PCM captured by the Swift mic layer into the ASR queue.
+
+        The relay is kept alive across stop/start so Swift's microphone
+        WebSocket can reconnect on the next Follow me without hitting a closed
+        port. (Re)start it here defensively: app launch starts it, but a failed
+        bind or an external shutdown leaves it absent.
+        """
+        need_start = self.audio_server is None or not self.audio_server.is_serving
+        if need_start:
+            old = self.audio_server
+            if old is not None:
+                try:
+                    old.stop()
+                except Exception:
+                    pass
             self.audio_server = AudioServer(self.asr.feed_audio, port=AUDIO_PORT)
             self.audio_server.start()
 
@@ -397,7 +412,11 @@ class App:
             self._persist_position(force=True)
             self._want_listen = False
             self.asr.stop()
-            self._stop_audio_server()
+            # Keep the audio relay up: Swift (which owns the microphone) reconnects
+            # its WebSocket on the next Follow me start. Tearing the relay down
+            # here left port 8011 closed, so the next start reported listening but
+            # never received any PCM — nothing was detected, and repeated stop/
+            # start wedged the session into the "Try again" failure state.
             self._on_status("idle")
 
     def jump(self, word: int, doc_id: str | None = None, revision: int | None = None) -> None:

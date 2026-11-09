@@ -95,6 +95,7 @@ struct PageView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .frame(minHeight: 52)
     }
 
     @ViewBuilder private var content: some View {
