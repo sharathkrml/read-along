@@ -19,6 +19,7 @@ def fresh_app():
     app.status = "idle"
     app.error = ""
     app._want_listen = False
+    app.aligner = None
     asr = ASR(lambda *a, **k: None, lambda *a, **k: None)
     # Pretend a healthy server already serves 8010: ensure must fast-path
     # without spawning anything or reporting a status.

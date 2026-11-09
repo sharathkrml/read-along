@@ -20,6 +20,9 @@ class Aligner:
         self.words = words
         self.pos = 0
         self.conf = 0.0
+        # Last word matched exactly in the current utterance, even when the
+        # cursor cannot commit yet. The UI draws this as a live "heard" cue.
+        self.heard = -1
         self._index: dict[str, list[int]] = {}
         for i, w in enumerate(words):
             self._index.setdefault(w, []).append(i)
@@ -68,10 +71,12 @@ class Aligner:
             j = start
             exact = 0
             matched = 0
+            last = -1
             found = self._find(first, j)
             if found >= 0:
                 exact += 1
                 matched += 1
+                last = found
                 j = found + 1
             elif j < nwords and self._score(first, words[j]) > 0:
                 matched += 1
@@ -83,6 +88,7 @@ class Aligner:
                 if found >= 0:
                     exact += 1
                     matched += 1
+                    last = found
                     j = found + 1
                 elif j < nwords and self._score(a, words[j]) > 0:
                     matched += 1
@@ -91,7 +97,7 @@ class Aligner:
                 continue
             score = exact - 0.6 * (n - matched) - 0.005 * abs(start - self.pos)
             if best is None or score > best[0]:
-                best = (score, j, exact)
+                best = (score, j, exact, last)
         return best
 
     def update(self, text: str, final: bool = False) -> int:
@@ -107,10 +113,12 @@ class Aligner:
         # path; the monotonic DP below handles normal reading.
         anchor = self._anchor(asr, final)
         if anchor:
-            score, end, exact = anchor
+            score, end, exact, last = anchor
             if abs(end - self.pos) >= 2 and score >= 2.0:
                 self.pos = max(0, min(len(self.words), end))
                 self.conf = min(1.0, exact / max(1, len(asr)))
+                if last >= 0:
+                    self.heard = last
                 return self.pos
 
         lo = max(0, self.pos - 3)
@@ -157,6 +165,12 @@ class Aligner:
                 i -= 1
         if last_exact < 0:
             return self.pos
+        # The cue is a liveness signal, not a second cursor. Keep it near the
+        # cursor: one word can match a common word far ahead, and a dot in a
+        # different paragraph reads as a glitch instead of "I heard you".
+        heard = lo + last_exact
+        if heard <= self.pos + 8:
+            self.heard = heard
 
         new_pos = min(len(self.words), lo + last_exact + 1)
         if new_pos <= self.pos:

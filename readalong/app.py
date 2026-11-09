@@ -328,6 +328,7 @@ class App:
                 "pos": 0, "total": 0, "current": None, "next": None,
                 "page": 0, "next_page": None,
                 "current_boxes": [], "next_boxes": [], "confidence": 0.0,
+                "heard": -1,
             }
             if not self.model or not self.aligner:
                 return s
@@ -335,6 +336,7 @@ class App:
             s["pos"] = pos
             s["total"] = len(self.model["words"])
             s["confidence"] = self.aligner.conf
+            s["heard"] = self.aligner.heard
             gi = group_at(self.model, pos)
             if gi < 0:
                 return s
@@ -362,6 +364,8 @@ class App:
             self.status = "loading"
             self.error = ""
             self._want_listen = True
+            if self.aligner:
+                self.aligner.heard = -1
             if self.documents and self.doc_id:
                 self.documents.mark_read(self.doc_id)
         threading.Thread(target=self._start_bg, daemon=True).start()
@@ -426,6 +430,7 @@ class App:
                 return
             self.aligner.pos = max(0, min(word, len(self.model["words"])))
             self.aligner.conf = 1.0
+            self.aligner.heard = -1
             self.partial = ""
             self._persist_position(force=True)
 

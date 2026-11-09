@@ -41,11 +41,29 @@ check("noise does not advance", run("zzz qqq", final=False), 0)
 check("repeat does not go backwards", run("the cat", start=4) >= 4, True)
 check("repeat at end stays", run("the cat", start=6), 6)
 
+# The last exact word is exposed for the live cue before the cursor commits.
+a = Aligner(words("the cat sat on the mat"))
+a.pos = 2
+a.update("sat", final=False)
+check("single word moves nothing", a.pos, 2)
+check("single word is heard", a.heard, 2)
+a.update("zzz", final=False)
+check("noise keeps last heard", a.heard, 2)
+
 # a far jump on a final should re-anchor
 script = " ".join(f"w{i}" for i in range(40))
 a = Aligner(script.split())
 a.update("w25 w26 w27 w28", final=True)
 check("far jump", a.pos, 29)
+
+# The cue stays near the cursor, but an anchored jump moves it with the cursor.
+a = Aligner(script.split())
+a.update("w20", final=False)
+check("far single word is not previewed", a.heard, -1)
+a = Aligner(script.split())
+a.pos = 20
+a.update("w14 w15 w16 w17", final=True)
+check("anchor updates heard", a.heard, 17)
 
 # nearby re-anchor: restart a line above, or skip a line below
 def run_script(text, start, final=True):
