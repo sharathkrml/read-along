@@ -269,6 +269,15 @@ final class ReaderModel: ObservableObject {
         return spec
     }
 
+    /// Last word matched exactly in the current utterance. It can run ahead of
+    /// `cursor`; the reading pane draws it as a live "heard" cue.
+    var heardWord: Int? {
+        guard transportState == .listening,
+              let word = state.heard,
+              pageModel.words.indices.contains(word) else { return nil }
+        return word
+    }
+
     var highlightIdentity: Int {
         var hasher = Hasher()
         hasher.combine(cursor)

@@ -131,6 +131,7 @@ struct ReaderTextView: NSViewRepresentable {
         private struct HighlightState: Equatable {
             var spec: HighlightSpec
             var spokenWord: Int?
+            var heardWord: Int?
         }
 
         init(stage: Bool, model: ReaderModel?, page: Int?, onScrollTo: ((CGFloat) -> Void)?) {
@@ -159,7 +160,7 @@ struct ReaderTextView: NSViewRepresentable {
             // cursor itself is the next phrase, shown in blue.
             let spokenWord = model.transportState == .playing && !model.isComplete
                 ? max(0, model.cursor - 1) : nil
-            let next = HighlightState(spec: spec, spokenWord: spokenWord)
+            let next = HighlightState(spec: spec, spokenWord: spokenWord, heardWord: model.heardWord)
             let changed = next != highlighted
             if rebuilt || changed {
                 applyHighlight(next, in: view)
@@ -364,6 +365,19 @@ struct ReaderTextView: NSViewRepresentable {
                     }
                 }
             }
+            view.setPreviewWord(next.heardWord)
+        }
+
+        /// Bounding rect in the text view for one word; used by the dashed
+        /// "heard" cue, which is drawn separately from temporary attributes.
+        func previewRect(for word: Int, in view: JumpTextView) -> NSRect? {
+            guard let range = characterRange(word..<(word + 1)),
+                  let manager = view.layoutManager, let container = view.textContainer else { return nil }
+            manager.ensureLayout(forCharacterRange: range)
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return nil }
+            return manager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
         }
 
         func word(atCharacter index: Int) -> Int? {
@@ -527,6 +541,33 @@ final class JumpTextView: NSTextView {
     var readingMeasure: CGFloat = 680
     var stage = false
     private var contextWord: Int?
+    private(set) var previewWord: Int?
+
+    /// The dashed cue is drawn by the view, not as a temporary attribute, so
+    /// only its own old/new word rects need repainting.
+    func setPreviewWord(_ word: Int?) {
+        guard previewWord != word else { return }
+        let old = previewWord
+        previewWord = word
+        for value in [old, word].compactMap({ $0 }) {
+            guard let rect = coordinatorOwner?.previewRect(for: value, in: self) else { continue }
+            setNeedsDisplay(rect.insetBy(dx: -4, dy: -4))
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let word = previewWord,
+              let rect = coordinatorOwner?.previewRect(for: word, in: self),
+              rect.width > 0, rect.height > 0 else { return }
+        let box = rect.insetBy(dx: -2, dy: max(2, rect.height * 0.14))
+        let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+        path.lineWidth = 1.5
+        let dash: [CGFloat] = [2.5, 2.5]
+        path.setLineDash(dash, count: dash.count, phase: 0)
+        ReaderTheme.nsReadingStroke.setStroke()
+        path.stroke()
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)

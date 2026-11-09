@@ -578,6 +578,9 @@ Adding a 270M–740M embedder would cost memory and latency for no accuracy gain
 - `current` = `[start, end)` of the group containing `pos`.
 - `next` = the following group.
 - `page` = the current group's page.
+- `heard` = the last script word matched **exactly** in the current utterance,
+  even when `pos` has not committed yet (`-1` when none). It is the live
+  per-word cue: the UI dashes it while listening, and it never moves `pos`.
 - `current_boxes` = union of the current group's word boxes, per line.
 - `next_boxes` = union of the next group's boxes, **only if it is on the same
   page**. When the next phrase is on the following page, the blue box is empty
@@ -645,7 +648,8 @@ free port). No auth; loopback only.
   "next_page": 1,
   "current_boxes": [[0.09, 0.24, 0.82, 0.02]],
   "next_boxes": [[0.09, 0.27, 0.60, 0.02]],
-  "confidence": 0.93
+  "confidence": 0.93,
+  "heard": 99
 }
 ```
 

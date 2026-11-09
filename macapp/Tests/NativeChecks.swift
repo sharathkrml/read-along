@@ -116,13 +116,15 @@ struct NativeChecks {
         // State: empty payload and a representative payload.
         let emptyState = try! decode(ReaderState.self, "{}")
         checkEqual("state empty pos", emptyState.pos, nil)
+        checkEqual("state empty heard", emptyState.heard, nil)
         let state = try! decode(ReaderState.self, """
-        {"doc_id": "doc-1", "model_revision": 7, "status": "idle", "pos": 3, "total": 10,
-         "page": 0, "confidence": 0.5, "ocr_done": 1, "ocr_total": 2,
+        {"doc_id": "doc-1", "model_revision": 7, "status": "idle", "pos": 3, "heard": 7,
+         "total": 10, "page": 0, "confidence": 0.5, "ocr_done": 1, "ocr_total": 2,
          "speech_ready": true, "ocr_ready": false, "model_ready": true}
         """)
         checkEqual("state doc id", state.doc_id, "doc-1")
         checkEqual("state position", state.pos, 3)
+        checkEqual("state heard", state.heard, 7)
         checkEqual("state ocr done", state.ocr_done, 1)
         checkEqual("state speech ready", state.speech_ready, true)
 

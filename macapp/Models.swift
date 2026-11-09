@@ -140,6 +140,7 @@ struct ReaderState: Decodable, Equatable {
     var total: Int? = nil
     var page: Int? = nil
     var confidence: Double? = nil
+    var heard: Int? = nil
 }
 
 struct SetupStatus: Decodable, Equatable {
