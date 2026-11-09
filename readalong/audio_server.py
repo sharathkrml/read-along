@@ -26,10 +26,23 @@ class AudioServer:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
         self._thread: threading.Thread | None = None
+        # Set once the listening socket is actually bound, so callers know the
+        # port is open before Swift tries to connect its microphone WebSocket.
+        self._serving = threading.Event()
 
-    def start(self) -> None:
+    def start(self, wait: float = 5.0) -> None:
+        self._serving.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        if not self._serving.wait(wait):
+            self.stop()
+            raise RuntimeError(
+                f"audio relay did not bind to {self.host}:{self.port} within {wait}s"
+            )
+
+    @property
+    def is_serving(self) -> bool:
+        return self._serving.is_set()
 
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -42,20 +55,22 @@ class AudioServer:
 
         async def main() -> None:
             try:
+                # websockets.serve returns only after the socket is bound, so
+                # setting _serving here means the port is genuinely open.
                 self._server = await websockets.serve(handler, self.host, self.port)
             except OSError as exc:
                 # Port already in use (stale process from a previous launch).
-                # Keep running — mic streaming won't work, but the app won't
-                # crash. Follow me will still work via the existing server.
+                # Surface it instead of silently running a dead server.
                 print(f"[audio] could not bind to {self.host}:{self.port}: {exc}")
                 self._server = None
-                await asyncio.Future()  # run forever
                 return
+            self._serving.set()
             await asyncio.Future()  # run forever
 
         self._loop.run_until_complete(main())
 
     def stop(self) -> None:
+        self._serving.clear()
         if self._loop is not None and self._server is not None:
             try:
                 asyncio.run_coroutine_threadsafe(self._server.close(), self._loop)
