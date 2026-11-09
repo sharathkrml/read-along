@@ -83,3 +83,60 @@ finally:
 check("duplicate start spawns nothing", len(spawned), 0)
 
 print("\nall speech startup checks passed")
+
+
+# --- audio relay: no keepalive pings, and never the speech server's port ---
+import socket as socket_mod
+
+import readalong.speech as speech_mod
+from readalong import audio_server as audio_mod
+from readalong._config import ASR_PORT, AUDIO_PORT
+from readalong.speech import ASR as ASRClass
+
+
+class _FakeServer:
+    def close(self):
+        pass
+
+    async def wait_closed(self):
+        pass
+
+
+seen = {}
+
+
+async def fake_serve(handler, host, port, **kwargs):
+    seen.update(kwargs)
+    return _FakeServer()
+
+
+original_serve = audio_mod.websockets.serve
+audio_mod.websockets.serve = fake_serve
+try:
+    relay = audio_mod.AudioServer(lambda pcm: None, port=0)
+    relay.start()
+    check("relay disables keepalive pings", seen.get("ping_interval", "missing"), None)
+    relay.stop()
+finally:
+    audio_mod.websockets.serve = original_serve
+
+
+class _FakeSocket:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def bind(self, addr):
+        if addr[1] in (ASR_PORT, AUDIO_PORT):
+            raise OSError("in use")
+
+
+original_socket = socket_mod.socket
+speech_mod.socket.socket = _FakeSocket
+try:
+    got = ASRClass._free_port(ASR_PORT)
+finally:
+    speech_mod.socket.socket = original_socket
+check("speech port skips audio relay", got not in (ASR_PORT, AUDIO_PORT), True)

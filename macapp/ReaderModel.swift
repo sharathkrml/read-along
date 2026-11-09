@@ -745,6 +745,7 @@ final class ReaderModel: ObservableObject {
                 try await client?.startFollow()
                 feedback(.light)
             } catch {
+                audioCapture.stop()
                 transportState = .failed
                 showToast(error.localizedDescription, isError: true)
             }
@@ -754,8 +755,8 @@ final class ReaderModel: ObservableObject {
     func stopFollow() {
         let c = client
         transportState = .idle
+        audioCapture.stop()
         Task {
-            audioCapture.stop()
             do { try await c?.stopFollow(); feedback(.navigation) } catch {}
         }
     }

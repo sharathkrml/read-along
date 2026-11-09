@@ -99,7 +99,12 @@ def main() -> None:
     APP.with_asr = not args.no_asr
     # The audio relay is always on so the Swift mic layer can connect as soon
     # as Follow me is tapped; Python never opens the microphone itself.
-    APP._start_audio_server()
+    try:
+        APP._start_audio_server()
+    except Exception as exc:
+        # A stale process holding the port must not take the whole backend
+        # down; Follow me will report the relay error when it is started.
+        print(f"[audio] relay unavailable: {exc}")
     threading.Thread(target=_startup, args=(APP, not args.no_asr), daemon=True).start()
 
     server = None

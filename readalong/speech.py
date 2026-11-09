@@ -20,7 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from ._config import ASR_MODEL, ASR_PORT, DATA
+from ._config import ASR_MODEL, ASR_PORT, AUDIO_PORT, DATA, WEB_PORT
 
 
 def fermion_cmd() -> list[str]:
@@ -60,6 +60,7 @@ class ASR:
         self.running = False
         self.rms = 0.0
         self._lock = threading.Lock()
+        self._gen = 0
 
     @staticmethod
     def healthy(port: int) -> bool:
@@ -73,6 +74,10 @@ class ASR:
     @staticmethod
     def _free_port(start: int) -> int:
         for p in range(start, start + 20):
+            # Never hand the speech server the PCM relay's port: fermion would
+            # bind it first and the Swift mic socket would have nowhere to go.
+            if p in (AUDIO_PORT, WEB_PORT):
+                continue
             with socket.socket() as s:
                 try:
                     s.bind(("127.0.0.1", p))
@@ -86,6 +91,8 @@ class ASR:
             if self.port and self.healthy(self.port):
                 return
             for p in range(ASR_PORT, ASR_PORT + 10):
+                if p == AUDIO_PORT:
+                    continue
                 if self.healthy(p):
                     self.port = p
                     return
@@ -108,45 +115,68 @@ class ASR:
             raise RuntimeError("speech server did not start within 120s")
 
     def start(self) -> None:
-        if self.running:
-            return
-        self.running = True
-        self.q = queue.Queue()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        with self._lock:
+            if self.running:
+                return
+            old = self.thread
+        # stop() closes the socket but returns immediately. Wait for that
+        # session to end before opening the next one: fermion allows a single
+        # live stream, and a start that races the old session's final decode
+        # gets "engine busy" -> the UI shows "Try again".
+        if old is not None and old.is_alive():
+            old.join(timeout=3)
+        with self._lock:
+            if self.running:
+                return
+            self._gen += 1
+            gen = self._gen
+            self.running = True
+            self.q = queue.Queue()
+            self.thread = threading.Thread(target=self._run, args=(gen,), daemon=True)
+            self.thread.start()
 
     def feed_audio(self, pcm: bytes) -> None:
         """Swift pushes captured PCM (float32 mono 16 kHz) here for ASR."""
         if self.running:
             self.q.put(pcm)
 
-    def _run(self) -> None:
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
+    def _run(self, gen: int) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.loop = loop
         err = False
         try:
-            self.loop.run_until_complete(self._session())
+            loop.run_until_complete(self._session(gen))
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            err = True
-            self.on_status("error", str(e))
+            if gen == self._gen:
+                err = True
+                self.on_status("error", str(e))
         finally:
-            if not err:
-                self.on_status("idle")
+            if gen == self._gen:
+                self.running = False
+                if not err:
+                    self.on_status("idle")
+                self.loop = None
+                self.ws = None
             try:
-                self.loop.close()
+                loop.close()
             except Exception:
                 pass
-            self.loop = None
 
-    async def _session(self) -> None:
+    async def _session(self, gen: int) -> None:
         import websockets
 
         uri = f"ws://127.0.0.1:{self.port}/v1/audio/stream"
         async with websockets.connect(uri, max_size=None) as ws:
+            if gen != self._gen:
+                return
             self.ws = ws
             await ws.send(json.dumps({"sample_rate": 16000, "format": "pcm_f32le"}))
-            self.on_status("listening")
-            sender = asyncio.create_task(self._send(ws))
+            if gen == self._gen:
+                self.on_status("listening")
+            sender = asyncio.create_task(self._send(ws, gen))
             try:
                 async for msg in ws:
                     d = json.loads(msg)
@@ -158,31 +188,36 @@ class ASR:
                     elif t == "done":
                         break
             finally:
-                self.running = False
                 sender.cancel()
                 try:
                     await sender
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     pass
-                self.ws = None
+                if gen == self._gen:
+                    self.ws = None
 
-    async def _send(self, ws) -> None:
-        while self.running:
+    async def _send(self, ws, gen: int) -> None:
+        while self.running and gen == self._gen:
             try:
                 chunk = self.q.get_nowait()
             except queue.Empty:
                 await asyncio.sleep(0.01)
                 continue
             await ws.send(chunk)
+        if gen != self._gen:
+            return
         try:
             await ws.send(json.dumps({"type": "end"}))
         except Exception:
             pass
 
     def stop(self) -> None:
-        self.running = False
-        ws, loop = self.ws, self.loop
-        if ws is not None and loop is not None:
+        with self._lock:
+            self.running = False
+            ws, loop = self.ws, self.loop
+        if ws is not None and loop is not None and not loop.is_closed():
             try:
                 asyncio.run_coroutine_threadsafe(ws.close(), loop)
             except Exception:
@@ -190,6 +225,9 @@ class ASR:
 
     def shutdown(self) -> None:
         self.stop()
+        thread = self.thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3)
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.terminate()

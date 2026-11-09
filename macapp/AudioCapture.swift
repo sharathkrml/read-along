@@ -16,8 +16,8 @@ import Foundation
 /// Objective-C ``NSException`` (not an NSError) when there is no usable input,
 /// which would crash the app. The delegate-based API never crashes.
 final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
-    private let session = AVCaptureSession()
-    private let output = AVCaptureAudioDataOutput()
+    private var session = AVCaptureSession()
+    private var output = AVCaptureAudioDataOutput()
     private let outputQueue = DispatchQueue(label: "readalong.audio.capture")
     private var socketTask: URLSessionWebSocketTask?
     private(set) var isRunning = false
@@ -42,6 +42,13 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
         } catch {
             throw MicrophoneError.tapInstallFailed(error.localizedDescription)
         }
+
+        // A fresh session per run: stop() leaves the old one configured, and
+        // re-adding its input/output (or starting an interrupted session again)
+        // made the second Follow me fail with "Try again".
+        let session = AVCaptureSession()
+        let output = AVCaptureAudioDataOutput()
+
         guard session.canAddInput(input) else {
             throw MicrophoneError.noInputFormat
         }
@@ -64,6 +71,8 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
 
         output.setSampleBufferDelegate(self, queue: outputQueue)
 
+        self.session = session
+        self.output = output
         session.startRunning()
 
         let task = URLSession.shared.webSocketTask(with: url)
@@ -74,10 +83,10 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
 
     func stop() {
         guard isRunning else { return }
+        isRunning = false
         session.stopRunning()
         socketTask?.cancel(with: .goingAway, reason: nil)
         socketTask = nil
-        isRunning = false
     }
 
     // MARK: - AVCaptureAudioDataOutputSampleBufferDelegate
