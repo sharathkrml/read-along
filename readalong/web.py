@@ -88,8 +88,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(APP.model_snapshot())
             elif p == "/state":
                 self._json(APP.state())
-            elif p == "/mics":
-                self._json(APP.mics())
             elif p == "/export":
                 q = parse_qs(urlparse(self.path).query)
                 mode = q.get("mode", ["read"])[0]
@@ -172,9 +170,6 @@ class Handler(BaseHTTPRequestHandler):
             elif p == "/jump":
                 APP.jump(int(body.get("word", 0)), doc_id=body.get("doc_id"), revision=body.get("revision"))
                 self._json({"ok": True, **APP.state()})
-            elif p == "/mic":
-                device = body.get("device", None)
-                self._json(APP.set_mic_device(device))
             elif p == "/simulate":
                 APP._on_text(str(body.get("text", "")), bool(body.get("final", True)))
                 self._json(APP.state())

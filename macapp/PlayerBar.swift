@@ -282,23 +282,23 @@ struct PlayerBar: View {
                 get: { model.selectedMicID == nil },
                 set: { on in if on { model.selectMic(nil) } }
             ))
-            if !model.microphones.devices.isEmpty {
+            if !model.microphones.isEmpty {
                 Divider()
-                ForEach(model.microphones.devices) { mic in
+                ForEach(model.microphones) { mic in
                     Toggle(mic.name, isOn: Binding(
                         get: { model.selectedMicID == mic.id },
                         set: { on in if on { model.selectMic(mic) } }
                     ))
                 }
             }
-            if let _ = model.selectedMicID, model.selectedMicrophone == nil {
+            if model.savedMicUnavailable, let name = model.prefs.micName, !name.isEmpty {
                 Divider()
-                Button("Saved microphone unavailable") { }
+                Button("Saved microphone unavailable · \(name)") { }
                     .disabled(true)
             }
             Divider()
             Button("Refresh devices") {
-                Task { await model.refreshMicrophones() }
+                model.refreshMicrophonesAndSync()
             }
             SettingsLink { Label("Microphone settings…", systemImage: "gearshape") }
         } label: {
@@ -334,9 +334,7 @@ struct PlayerBar: View {
 
     /// Menu items render a leading checkmark without changing the title.
     private var microphoneLabel: String {
-        if let mic = model.selectedMicrophone { return mic.name }
-        if let saved = model.prefs.micName, !saved.isEmpty { return saved }
-        return "System default"
+        model.selectedMicLabel
     }
 
     private var liveLabel: String {

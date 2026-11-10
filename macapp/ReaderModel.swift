@@ -65,8 +65,9 @@ final class ReaderModel: ObservableObject {
     @Published var selectedDocumentIDs: Set<String> = []
     @Published var pendingRemove: String?
     @Published var toast: Toast?
-    @Published var microphones = Microphones()
-    @Published var selectedMicID: Int?
+    @Published var microphones: [Microphone] = []
+    @Published var selectedMicID: String?
+    @Published var defaultMicID: String?
     @Published var micPermissionState: AVAuthorizationStatus = .notDetermined
     @Published var micLevel: Double = 0
     @Published var transportState: TransportState = .idle
@@ -112,6 +113,7 @@ final class ReaderModel: ObservableObject {
     private let imageCache = NSCache<NSString, NSImage>()
     private let sourceCache = NSCache<NSString, NSData>()
     private var deviceObservers: [NSObjectProtocol] = []
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var pageImageTask: Task<Void, Never>?
     private var pageImageKey = ""
     private var pageImagesDocID = ""
@@ -149,8 +151,8 @@ final class ReaderModel: ObservableObject {
         }
         imageCache.totalCostLimit = 48 * 1024 * 1024
         imageCache.countLimit = 5
-        // If a microphone is unplugged mid-reading, follow the user to another
-        // input instead of leaving Follow me stuck on a dead device.
+        // Hot-plugged inputs come and go; refresh on both edges. Wake and app
+        // activation refreshes live in their respective handlers.
         deviceObservers.append(
             NotificationCenter.default.addObserver(
                 forName: AVCaptureDevice.wasDisconnectedNotification,
@@ -162,10 +164,40 @@ final class ReaderModel: ObservableObject {
                 }
             }
         )
+        deviceObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasConnectedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleMicrophoneConnected(notification)
+                }
+            }
+        )
+        workspaceObservers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.handleWake()
+                }
+            }
+        )
+        audioCapture.onFailure = { [weak self] message in
+            Task { @MainActor in
+                self?.failCapture(message)
+            }
+        }
     }
 
     deinit {
         deviceObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        workspaceObservers.forEach {
+            NSWorkspace.shared.notificationCenter.removeObserver($0)
+        }
     }
 
     private static func savePrefs(_ preferences: Prefs) {
@@ -230,6 +262,10 @@ final class ReaderModel: ObservableObject {
         if let operationError, transportState == .failed { return operationError }
         switch transportState {
         case .preparing: return "Preparing the local speech engine. The microphone starts only for this session."
+        case .failed:
+            if let error = operationError, !error.isEmpty { return error }
+            if let error = state.error, !error.isEmpty { return error }
+            return "Follow me couldn't start. Try again."
         case .waitingForText: return "Text recovery is continuing. Stop to cancel automatic continuation."
         case .listening: return followStatusText
         case .paused: return "Your place is kept. Resume whenever you're ready."
@@ -405,6 +441,9 @@ final class ReaderModel: ObservableObject {
 
     func start() async {
         guard client == nil else { return }
+        // Native enumeration needs no backend, so the mic label is correct from
+        // the first frame instead of saying "No microphone" while Python boots.
+        refreshMicrophones()
         let service = BackendService.shared
         for _ in 0..<1200 {
             if service.startupError != nil { break }
@@ -422,13 +461,14 @@ final class ReaderModel: ObservableObject {
             modelSetupKey = "welcome"
         }
         await refreshPageImage()
-        await refreshMicrophones()
+        refreshMicrophones()
         pollTask = Task { [weak self] in await self?.pollLoop() }
     }
 
     /// Quit path: flush the exact position before the owned backend is terminated.
     /// Blocking is bounded (2 s) and runs the request off the main actor.
     func flushForTermination() {
+        audioCapture.stop()
         guard let c = client, !pageModel.words.isEmpty else { return }
         let target = cursor
         let docID = pageModel.doc_id
@@ -445,6 +485,7 @@ final class ReaderModel: ObservableObject {
     private func pollLoop() async {
         var libraryClock = Date()
         var setupClock = Date()
+        var micClock = Date()
         while !Task.isCancelled {
             let busy = isPlaying || state.status == "listening"
             let interval: UInt64 = !activeWindow ? 1_200_000_000 : (busy ? 120_000_000 : 400_000_000)
@@ -463,7 +504,38 @@ final class ReaderModel: ObservableObject {
                 setupClock = Date()
                 await refreshSetup()
             }
+            // Device notifications can be missed (sleep, driver re-enumeration).
+            // The native scan is cheap, so reconcile while the window is active.
+            if activeWindow, Date().timeIntervalSince(micClock) > 4.0 {
+                micClock = Date()
+                refreshMicrophones()
+                await syncCaptureDeviceIfNeeded()
+            }
         }
+    }
+
+    /// Keep the live capture session on the device the UI names, and surface a
+    /// dead session instead of leaving the player claiming it is listening.
+    private func syncCaptureDeviceIfNeeded() async {
+        guard audioCapture.isRunning else { return }
+        let activeID = selectedMicID ?? defaultMicID ?? microphones.first?.id
+        guard let activeID else {
+            failCapture("No microphone input device was found.")
+            return
+        }
+        if audioCapture.deviceID != activeID {
+            do { try await restartCapture(deviceID: activeID) } catch { failCapture(error.localizedDescription) }
+            return
+        }
+        guard transportState == .listening || transportState == .preparing,
+              !audioCapture.isCapturing else { return }
+        do { try await restartCapture(deviceID: activeID) } catch { failCapture(error.localizedDescription) }
+    }
+
+    /// A user-visible refresh that also fixes a live session, not just the menu.
+    func refreshMicrophonesAndSync() {
+        refreshMicrophones()
+        Task { await syncCaptureDeviceIfNeeded() }
     }
 
     private func applyState(_ newState: ReaderState, refreshModel: Bool = true) async {
@@ -1013,24 +1085,43 @@ final class ReaderModel: ObservableObject {
         Task {
             let ok = await self.requestMicrophoneAccessIfNeeded()
             guard ok else { return }
+            guard let audioURL else {
+                showToast("The local audio relay is not ready. Try again in a moment.", isError: true)
+                return
+            }
             // Start Swift-side microphone capture (Python never touches the mic,
             // so TCC attributes microphone access to Read Along).
-            if let audioURL {
-                do {
-                    try await audioCapture.start(to: audioURL)
-                } catch {
-                    transportState = .failed
-                    showToast("Could not start microphone capture: \(error.localizedDescription)", isError: true)
-                    return
-                }
-            }
             transportState = .preparing
+            do {
+                let used = try await audioCapture.start(to: audioURL, deviceID: selectedMicID ?? defaultMicID)
+                if let selected = selectedMicID {
+                    if selected != used {
+                        // The chosen device vanished since the list was refreshed;
+                        // capture fell back to the default. Name what is recording.
+                        selectedMicID = nil
+                    }
+                } else if defaultMicID != used {
+                    defaultMicID = used
+                }
+            } catch {
+                transportState = .failed
+                operationError = error.localizedDescription
+                showToast("Could not start microphone capture: \(error.localizedDescription)", isError: true)
+                return
+            }
+            // Stop (or a capture failure callback) may have landed while the
+            // session was starting; never start the engine after that.
+            guard transportState == .preparing else {
+                audioCapture.stop()
+                return
+            }
             do {
                 try await client?.startFollow()
                 feedback(.light)
             } catch {
                 audioCapture.stop()
                 transportState = .failed
+                operationError = error.localizedDescription
                 showToast(error.localizedDescription, isError: true)
             }
         }
@@ -1303,90 +1394,208 @@ final class ReaderModel: ObservableObject {
     func refreshOnAppear() {
         Task { await refreshSetup() }
         Task { await refreshLibrary() }
-        Task { await refreshMicrophones() }
+        refreshMicrophones()
     }
 
     // MARK: microphone (Follow me)
 
-    var selectedMicrophone: Microphone? {
-        microphones.devices.first { $0.id == selectedMicID }
-    }
-
+    /// The device the label should name: the explicit selection when it exists,
+    /// otherwise the actual system-default input, never a dead saved name.
     var selectedMicLabel: String {
-        selectedMicrophone?.name ?? "System default"
+        MicrophoneSelection.displayName(
+            selectedID: selectedMicID,
+            defaultID: defaultMicID,
+            devices: microphones
+        )
     }
 
-    func refreshMicrophones() async {
-        guard let client else { return }
-        guard let payload = try? await client.mics() else { return }
-        microphones = payload
-        // Reconcile the remembered name with the device list: USB/AirPods ids
-        // shift between launches, names usually survive.
-        if let name = prefs.micName, !name.isEmpty,
-           let device = payload.devices.first(where: { $0.name == name }),
-           selectedMicID != device.id {
-            selectedMicID = device.id
-            _ = try? await client.setMic(device.id)
-        } else if prefs.micName == nil, selectedMicID == nil {
-            selectedMicID = nil
+    var savedMicUnavailable: Bool {
+        guard let uid = prefs.micUID else {
+            guard let name = prefs.micName, !name.isEmpty else { return false }
+            return !microphones.contains { $0.name == name }
+        }
+        return !microphones.contains { $0.id == uid }
+    }
+
+    /// Reconcile the native device list with the saved preference. A saved
+    /// device that is missing at launch stays saved (it may connect later), but
+    /// `selectedMicID` only ever names a device attached right now.
+    func refreshMicrophones(excluding excluded: Set<String> = []) {
+        let discovered = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
+            .filter { !excluded.contains($0.uniqueID) }
+            .map { Microphone(id: $0.uniqueID, name: $0.localizedName) }
+        if microphones != discovered {
+            microphones = discovered
+        }
+
+        let defaultID: String? = {
+            guard let id = AVCaptureDevice.default(for: .audio)?.uniqueID,
+                  discovered.contains(where: { $0.id == id }) else { return nil }
+            return id
+        }()
+        // While CoreAudio settles after an unplug it can briefly report no
+        // default; use an attached input so capture and the label stay honest.
+        let resolvedDefault = defaultID ?? discovered.first?.id
+        if defaultMicID != resolvedDefault {
+            defaultMicID = resolvedDefault
+        }
+
+        let choice = MicrophoneSelection.reconcile(
+            savedUID: prefs.micUID,
+            legacyName: prefs.micName,
+            devices: discovered
+        )
+        // One-time migration from the old name-only preference.
+        if let migrated = choice.migratedUID, prefs.micUID != migrated {
+            prefs.micUID = migrated
+        }
+        if selectedMicID != choice.selectedID {
+            selectedMicID = choice.selectedID
         }
     }
 
     func selectMic(_ device: Microphone?) {
         selectedMicID = device?.id
+        prefs.micUID = device?.id
         prefs.micName = device?.name
-        let client = client
-        let id = device?.id
+
+        guard audioCapture.isRunning else {
+            showToast("Microphone: \(selectedMicLabel)")
+            feedback(.navigation)
+            return
+        }
         Task {
             do {
-                try await client?.setMic(id)
-                if let device {
-                    showToast("Microphone: \(device.name)")
-                } else {
-                    showToast("Microphone: system default")
-                }
+                try await restartCapture()
+                showToast("Microphone: \(selectedMicLabel)")
                 feedback(.navigation)
             } catch {
-                await self.refreshMicrophones()
-                showToast(error.localizedDescription, isError: true)
+                failCapture(error.localizedDescription)
             }
         }
     }
 
-    /// An input microphone was disconnected. Pick a still-available device and,
-    /// if Follow me is active, restart capture on the new system-default input
-    /// so reading aloud keeps working instead of going silent.
+    /// Swap the live input without restarting the speech engine or the PCM
+    /// relay. Python never owns the device, so only Swift capture changes.
+    /// `deviceID` overrides the saved selection for a one-off fallback.
+    private func restartCapture(deviceID explicit: String? = nil) async throws {
+        guard let audioURL else { throw MicrophoneError.audioRelayUnavailable }
+        let target = explicit ?? selectedMicID
+        audioCapture.stop()
+        let used = try await audioCapture.start(to: audioURL, deviceID: target)
+        if explicit == nil {
+            if let selected = selectedMicID, selected != used {
+                // The selected device vanished between enumeration and start.
+                selectedMicID = nil
+            }
+            if selectedMicID == nil, defaultMicID != used {
+                defaultMicID = used
+            }
+        }
+    }
+
+    private func failCapture(_ message: String) {
+        guard transportState == .listening || transportState == .preparing else {
+            audioCapture.stop()
+            return
+        }
+        let client = client
+        audioCapture.stop()
+        transportState = .failed
+        operationError = message
+        showToast(message, isError: true)
+        Task { try? await client?.stopFollow() }
+    }
+
     private func handleMicrophoneDisconnected(_ notification: Notification) {
         guard let device = notification.object as? AVCaptureDevice,
               device.hasMediaType(.audio) else { return }
-        Task { await recoverFromMicrophoneDisconnect(device: device) }
+        let id = device.uniqueID
+        let name = device.localizedName
+        Task { await recoverFromMicrophoneDisconnect(id: id, name: name) }
     }
 
-    private func recoverFromMicrophoneDisconnect(device: AVCaptureDevice) async {
-        // Re-enumerate so the picker reflects what is still attached.
-        await refreshMicrophones()
-        // Prefer the remembered mic if it survived, otherwise fall back to the
-        // system default (nil) so capture picks up whatever input remains.
-        if let name = prefs.micName, !name.isEmpty,
-           let surviving = microphones.devices.first(where: { $0.name == name }) {
-            selectedMicID = surviving.id
-        } else {
-            selectedMicID = nil
+    private var microphoneSwitchText: String {
+        microphones.isEmpty ? "no microphone connected" : "now using \(selectedMicLabel)"
+    }
+
+    private func recoverFromMicrophoneDisconnect(id: String, name: String) async {
+        let wasCapturing = audioCapture.deviceID == id
+        let wasPreferred = prefs.micUID == id
+            || (prefs.micUID == nil && prefs.micName == name)
+        let previousSelection = selectedMicID
+
+        // An unplug is a deliberate loss of that input. Forget the saved
+        // preference so a stale enumeration cannot put the dead device back in
+        // the label; a mic missing at launch still stays saved and can return.
+        if prefs.micUID == id {
+            prefs.micUID = nil
+            prefs.micName = nil
+        } else if prefs.micUID == nil, prefs.micName == name {
+            prefs.micName = nil
         }
-        _ = try? await client?.setMic(selectedMicID)
-        showToast("Microphone disconnected — switched to \(selectedMicLabel)", isError: false)
-        // If we were capturing, restart the session on the new default input.
-        guard transportState.isActive, let audioURL else { return }
-        audioCapture.stop()
-        do {
-            try await audioCapture.start(to: audioURL)
-        } catch {
-            transportState = .failed
-            showToast("Could not restart microphone capture: \(error.localizedDescription)", isError: true)
+
+        // Let AVFoundation finish removing the device before enumerating, so
+        // the dead input cannot be re-selected by stale enumeration data.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        refreshMicrophones(excluding: [id])
+
+        if wasCapturing, audioCapture.isRunning {
+            let fallback = selectedMicID ?? defaultMicID ?? microphones.first?.id
+            do {
+                try await restartCapture(deviceID: fallback)
+                showToast("Microphone disconnected — \(microphoneSwitchText)")
+            } catch {
+                failCapture(error.localizedDescription)
+            }
+        } else if previousSelection != nil && selectedMicID != previousSelection {
+            showToast("Microphone disconnected — \(microphoneSwitchText)")
+        } else if wasPreferred, selectedMicID == nil {
+            showToast("Microphone disconnected — \(microphoneSwitchText)")
+        }
+    }
+
+    private func handleMicrophoneConnected(_ notification: Notification) {
+        guard let device = notification.object as? AVCaptureDevice,
+              device.hasMediaType(.audio) else { return }
+        Task { await recoverFromMicrophoneConnect() }
+    }
+
+    private func recoverFromMicrophoneConnect() async {
+        let previousSelection = selectedMicID
+        let wasCapturing = audioCapture.isRunning
+        refreshMicrophones()
+        guard selectedMicID != previousSelection else {
+            await syncCaptureDeviceIfNeeded()
             return
         }
-        transportState = .listening
-        feedback(.light)
+        if wasCapturing {
+            do {
+                try await restartCapture()
+                showToast("Microphone connected — now using \(selectedMicLabel)")
+            } catch {
+                failCapture(error.localizedDescription)
+            }
+        } else if selectedMicID != nil {
+            showToast("Microphone connected — \(selectedMicLabel) ready")
+        }
+    }
+
+    /// Sleep can leave a capture session alive on paper but silent. The relay
+    /// socket is replaced too, so a stale WebSocket cannot strand the session.
+    private func handleWake() async {
+        let wasCapturing = audioCapture.isRunning
+        refreshMicrophones()
+        guard wasCapturing else { return }
+        do {
+            try await restartCapture()
+        } catch {
+            failCapture(error.localizedDescription)
+        }
     }
 
     // MARK: feedback + toasts

@@ -31,6 +31,10 @@ struct ContentView: View {
         .task { await model.start() }
         .onChange(of: scenePhase) { _, phase in
             model.activeWindow = phase == .active
+            if phase == .active {
+                // Catch inputs plugged in while the app was in the background.
+                model.refreshMicrophonesAndSync()
+            }
         }
         .onAppear {
             #if DEBUG

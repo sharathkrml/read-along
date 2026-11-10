@@ -1,7 +1,8 @@
 """Read Along — speech engine (Phonon-2.5 via the bundled fermion CLI).
 
-Starts a local `fermion serve` WebSocket server, opens the microphone with
-sounddevice, streams PCM, and feeds partial/final transcripts back to the app.
+Starts a local `fermion serve` WebSocket server and feeds it PCM relayed from
+the Swift capture layer; partial/final transcripts come back over the socket.
+Python never opens the microphone itself.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from ._config import ASR_MODEL, ASR_PORT, AUDIO_PORT, DATA, WEB_PORT
+from ._config import ASR_MODEL, ASR_PORT, DATA, WEB_PORT
 
 
 def fermion_cmd() -> list[str]:
@@ -49,10 +50,6 @@ class ASR:
         self.on_status = on_status
         self.proc: subprocess.Popen | None = None
         self.port: int | None = None
-        # Mic device selection now lives in the Swift capture layer; kept for
-        # backwards compatibility with the mic picker, but no longer opens a
-        # stream here — Python never touches the microphone directly.
-        self.device: int | None = None
         self.thread: threading.Thread | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.ws = None
@@ -74,9 +71,7 @@ class ASR:
     @staticmethod
     def _free_port(start: int) -> int:
         for p in range(start, start + 20):
-            # Never hand the speech server the PCM relay's port: fermion would
-            # bind it first and the Swift mic socket would have nowhere to go.
-            if p in (AUDIO_PORT, WEB_PORT):
+            if p == WEB_PORT:
                 continue
             with socket.socket() as s:
                 try:
@@ -88,14 +83,12 @@ class ASR:
 
     def ensure(self, notify: bool = True) -> None:
         with self._lock:
-            if self.port and self.healthy(self.port):
+            # Only reuse the server this backend started. A surviving server
+            # from an earlier app launch may still hold its single live stream,
+            # and adopting it made the next Follow me fail with "engine busy".
+            if (self.proc is not None and self.proc.poll() is None
+                    and self.port and self.healthy(self.port)):
                 return
-            for p in range(ASR_PORT, ASR_PORT + 10):
-                if p == AUDIO_PORT:
-                    continue
-                if self.healthy(p):
-                    self.port = p
-                    return
             cmd = fermion_cmd()
             DATA.mkdir(parents=True, exist_ok=True)
             log = open(DATA / "asr.log", "ab")
@@ -242,38 +235,3 @@ def tail(path: Path, n: int = 800) -> str:
         return data.decode("utf-8", "replace").strip()
     except Exception:
         return ""
-
-
-def list_mics() -> dict:
-    """macOS input devices the Follow me picker can choose from."""
-    import sounddevice as sd
-
-    payload = {"default": None, "devices": []}
-    try:
-        # PortAudio caches the device list, so a USB/Bluetooth mic that was
-        # unplugged keeps showing up until PortAudio is re-initialized.
-        # Terminating and re-querying forces a fresh CoreAudio enumeration.
-        try:
-            sd._terminate()
-            sd._initialize()
-        except Exception:
-            pass
-        devices = sd.query_devices()
-        default = sd.default.device[0]
-        try:
-            default = int(default)
-        except Exception:
-            default = None
-        payload["default"] = default
-        for i, d in enumerate(devices):
-            ins = int(d.get("max_input_channels") or 0)
-            if ins <= 0:
-                continue
-            payload["devices"].append({
-                "id": i,
-                "name": str(d.get("name", "")),
-                "channels": ins,
-            })
-    except Exception as e:
-        payload["error"] = str(e)
-    return payload

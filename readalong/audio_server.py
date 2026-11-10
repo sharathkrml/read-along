@@ -19,9 +19,11 @@ import websockets
 class AudioServer:
     """WebSocket server that receives PCM from the Swift capture layer."""
 
-    def __init__(self, feed_callback, host: str = "127.0.0.1", port: int = 8011):
+    def __init__(self, feed_callback, host: str = "127.0.0.1", port: int = 0):
         self.feed = feed_callback
         self.host = host
+        # Port 0 lets the OS choose, so a backend left over from an earlier
+        # launch cannot hold this relay's port and starve the new backend.
         self.port = port
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
@@ -74,6 +76,9 @@ class AudioServer:
                 self._server = await websockets.serve(
                     handler, self.host, self.port, ping_interval=None,
                 )
+                sockets = getattr(self._server, "sockets", None)
+                if sockets:
+                    self.port = int(sockets[0].getsockname()[1])
             except OSError as exc:
                 # Port already in use (stale process from a previous launch).
                 # Surface it instead of silently running a dead server.

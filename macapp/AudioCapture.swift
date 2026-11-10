@@ -20,19 +20,34 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
     private var output = AVCaptureAudioDataOutput()
     private let outputQueue = DispatchQueue(label: "readalong.audio.capture")
     private var socketTask: URLSessionWebSocketTask?
+    private var runtimeObserver: NSObjectProtocol?
+    private var failureReported = false
     private(set) var isRunning = false
+    /// AVFoundation uniqueID of the input in this session, nil when stopped.
+    private(set) var deviceID: String?
 
-    /// Start capturing and streaming to `url` (e.g. ``ws://127.0.0.1:8011/audio``).
-    /// Throws a clear error (never crashes) if the microphone can't be used.
-    func start(to url: URL) async throws {
-        guard !isRunning else { return }
+    /// True only while the session is live and still owns a running input.
+    var isCapturing: Bool { isRunning && session.isRunning }
+
+    /// Called on the main queue when capture or the PCM socket dies mid-session.
+    var onFailure: ((String) -> Void)?
+
+    /// Start capturing and streaming to `url` (the backend's echo of
+    /// ``state.audio_port``, e.g. ``ws://127.0.0.1:54321/audio``).
+    /// Returns the uniqueID of the device actually used. Throws a clear error
+    /// (never crashes) if the microphone can't be used.
+    @discardableResult
+    func start(to url: URL, deviceID: String? = nil) async throws -> String {
+        guard !isRunning else { return self.deviceID ?? "" }
 
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         guard status == .authorized else {
             throw MicrophoneError.notAuthorized
         }
 
-        guard let device = AVCaptureDevice.default(for: .audio) else {
+        // An explicit selection that just disappeared falls back to system
+        // default rather than failing the whole reading session.
+        guard let device = Self.inputDevice(id: deviceID) else {
             throw MicrophoneError.noInputDevice
         }
 
@@ -78,15 +93,58 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
         let task = URLSession.shared.webSocketTask(with: url)
         task.resume()
         self.socketTask = task
+        self.deviceID = device.uniqueID
+        self.failureReported = false
         self.isRunning = true
+        self.runtimeObserver = NotificationCenter.default.addObserver(
+            forName: .AVCaptureSessionRuntimeError,
+            object: session,
+            queue: .main
+        ) { [weak self] note in
+            let error = note.userInfo?[AVCaptureSessionErrorKey] as? Error
+            self?.reportFailure(
+                error?.localizedDescription ?? "The microphone input stopped."
+            )
+        }
+        return device.uniqueID
     }
 
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        if let runtimeObserver {
+            NotificationCenter.default.removeObserver(runtimeObserver)
+            self.runtimeObserver = nil
+        }
         session.stopRunning()
         socketTask?.cancel(with: .goingAway, reason: nil)
         socketTask = nil
+        deviceID = nil
+    }
+
+    private static func inputDevice(id: String?) -> AVCaptureDevice? {
+        if let id, let device = AVCaptureDevice(uniqueID: id) {
+            return device
+        }
+        if let device = AVCaptureDevice.default(for: .audio) {
+            return device
+        }
+        // CoreAudio can briefly report no default while switching inputs; any
+        // attached microphone is better than failing the whole session.
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices.first
+    }
+
+    private func reportFailure(_ message: String) {
+        guard isRunning, !failureReported else { return }
+        failureReported = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.onFailure?(message)
+        }
     }
 
     // MARK: - AVCaptureAudioDataOutputSampleBufferDelegate
@@ -112,10 +170,10 @@ final class AudioCapture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
         guard status == noErr, let dataPointer else { return }
 
         let pcmData = Data(bytes: dataPointer, count: length)
-        socketTask?.send(.data(pcmData)) { error in
-            if let error {
-                print("AudioCapture send error: \(error.localizedDescription)")
-            }
+        socketTask?.send(.data(pcmData)) { [weak self] error in
+            guard let error else { return }
+            print("AudioCapture send error: \(error.localizedDescription)")
+            self?.reportFailure("The microphone audio stream stopped. Start Follow me again.")
         }
     }
 }
@@ -125,6 +183,7 @@ enum MicrophoneError: LocalizedError {
     case noInputDevice
     case noInputFormat
     case tapInstallFailed(String)
+    case audioRelayUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -136,6 +195,8 @@ enum MicrophoneError: LocalizedError {
             return "The microphone input has no usable audio format."
         case .tapInstallFailed(let msg):
             return "Could not start microphone capture: \(msg)"
+        case .audioRelayUnavailable:
+            return "The local audio relay is not ready. Try again in a moment."
         }
     }
 }

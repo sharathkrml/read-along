@@ -4,12 +4,12 @@ import Foundation
 ///
 /// The server (readalong.web.Handler) is the source of truth. These structs
 /// only shape its responses for the SwiftUI layer: they decode library,
-/// page model, reading state, setup status, microphone, and model-status
-/// payloads. Fields the UI doesn't read are left optional so backend
-/// additions don't break decoding.
+/// page model, reading state, setup status, and model-status payloads. Fields
+/// the UI doesn't read are left optional so backend additions don't break
+/// decoding.
 ///
 /// Backend field names are snake_case; Swift keeps camelCase via CodingKeys
-/// where the two differ (e.g. Microphones.defaultDevice <- "default").
+/// where the two differ (e.g. ReaderState.speech_ready stays snake_case).
 
 struct LibraryPayload: Decodable, Equatable {
     var active: String?
@@ -149,27 +149,6 @@ struct SetupStatus: Decodable, Equatable {
     var ocr: ModelStatus? = nil
 
     init() { }
-}
-
-struct Microphone: Decodable, Identifiable, Equatable, Hashable {
-    var id: Int
-    var name: String
-    var channels: Int
-}
-
-struct Microphones: Decodable, Equatable {
-    var defaultDevice: Int?
-    var devices: [Microphone]
-
-    private enum CodingKeys: String, CodingKey {
-        case defaultDevice = "default"
-        case devices
-    }
-
-    init(defaultDevice: Int? = nil, devices: [Microphone] = []) {
-        self.defaultDevice = defaultDevice
-        self.devices = devices
-    }
 }
 
 struct ModelStatus: Decodable, Equatable {

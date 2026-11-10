@@ -17,7 +17,7 @@ command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/" 
 
 clone() {
   rm -rf "$2"
-  cp -Rc "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -R "$1" "$2"; }
+  cp -Rpc "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -Rp "$1" "$2"; }
 }
 
 echo "==> Python runtime"
@@ -59,7 +59,7 @@ cp "$ROOT/macapp/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/readalong.py" "$ROOT/fermion_main.py" "$APP/Contents/Resources/backend/"
 # The readalong package (split modules) must sit next to the entry shim so the
 # shim's `from readalong.__main__ import main` resolves inside the bundle.
-cp -R "$ROOT/readalong" "$APP/Contents/Resources/backend/"
+cp -Rp "$ROOT/readalong" "$APP/Contents/Resources/backend/"
 # Bundled sample document served at GET /sample. ocr-pdf.pdf is the text PDF;
 # ocr.jpg (a handwriting scan) was a dev scratch image and is not shipped.
 [ -f "$ROOT/ocr.pdf" ] && cp "$ROOT/ocr.pdf" "$APP/Contents/Resources/backend/"

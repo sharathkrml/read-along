@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import difflib
 import io
-import json
 import os
 import shutil
 import signal
@@ -21,14 +20,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from ._config import AUDIO_PORT, DATA, ConflictError, LockedPDFError, MissingModelError
+from ._config import DATA, ConflictError, LockedPDFError, MissingModelError
 from .aligner import Aligner
 from .audio_server import AudioServer
 from .cache import attach_word_boxes, load_cache, save_cache
 from .library import DocumentStore
 from .models import Models
 from .pdf import process_source
-from .speech import ASR, list_mics
+from .speech import ASR
 from .text import TEXT_SUFFIXES, decode_text
 from .text_model import build_pages_model, group_at, group_boxes, norm_text, rebase_position
 
@@ -63,40 +62,6 @@ class App:
         self.models = Models()
         self.asr = ASR(self._on_text, self._on_status)
         self.audio_server: AudioServer | None = None
-        self.mic_device: int | None = None
-        try:
-            raw = json.loads((DATA / "mic.json").read_text())
-            device = raw.get("device")
-            if isinstance(device, int):
-                self.mic_device = device
-                self.asr.device = device
-        except Exception:
-            pass
-
-    def mics(self) -> dict:
-        return list_mics()
-
-    def set_mic_device(self, device) -> None:
-        """Persisted across launches; restarts the stream if we are listening."""
-        with self.lock:
-            self.mic_device = device if isinstance(device, int) else None
-            self.asr.device = self.mic_device
-        try:
-            DATA.mkdir(parents=True, exist_ok=True)
-            (DATA / "mic.json").write_text(json.dumps({"device": self.mic_device}))
-        except Exception:
-            pass
-        if self.status == "listening":
-            self.stop()
-            threading.Thread(target=self._restart_mic_bg, daemon=True).start()
-        return {"ok": True, "device": self.mic_device}
-
-    def _restart_mic_bg(self) -> None:
-        try:
-            time.sleep(0.2)
-            self.start()
-        except Exception as e:
-            self._on_status("error", str(e))
 
     @property
     def workspace(self) -> Path:
@@ -367,7 +332,9 @@ class App:
                 "model_pages": len(self.model["pages"]) if self.model else 0,
                 "speech_ready": self.models.ready("speech"),
                 "ocr_ready": self.models.ready("ocr"),
-                "audio_port": AUDIO_PORT,
+                "audio_port": (self.audio_server.port
+                               if self.audio_server is not None and self.audio_server.is_serving
+                               else None),
                 "pos": 0, "total": 0, "current": None, "next": None,
                 "page": 0, "next_page": None,
                 "current_boxes": [], "next_boxes": [], "confidence": 0.0,
@@ -442,7 +409,7 @@ class App:
                     old.stop()
                 except Exception:
                     pass
-            self.audio_server = AudioServer(self.asr.feed_audio, port=AUDIO_PORT)
+            self.audio_server = AudioServer(self.asr.feed_audio, port=0)
             self.audio_server.start()
 
     def _stop_audio_server(self) -> None:
@@ -461,7 +428,7 @@ class App:
             self.asr.stop()
             # Keep the audio relay up: Swift (which owns the microphone) reconnects
             # its WebSocket on the next Follow me start. Tearing the relay down
-            # here left port 8011 closed, so the next start reported listening but
+            # here left its port closed, so the next start reported listening but
             # never received any PCM — nothing was detected, and repeated stop/
             # start wedged the session into the "Try again" failure state.
             self._on_status("idle")
@@ -661,9 +628,12 @@ def _startup(app: App, with_asr: bool) -> None:
         if not app.load():
             app.ocr_now()
     finally:
-        # ASR (Phonon) is started on demand by Follow me, not at launch, to
-        # keep baseline RAM down. _ensure_asr is retained for explicit warm-up.
-        pass
+        # Load the speech engine in the background once its model is on disk.
+        # The model being installed is not the engine being ready: deferring
+        # this to the first Follow me showed "Preparing the local speech
+        # engine" for every launch. The warm-up is silent and holds no mic.
+        if with_asr:
+            app._start_asr_early()
 
 
 def _ensure_asr(app: App) -> None:

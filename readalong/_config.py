@@ -28,7 +28,6 @@ CACHE = DATA / "cache.json"
 OCR_MODEL = "LiquidAI/LFM3-VL-2B-MLX-4bit"
 ASR_MODEL = "phonon-2.5-en"
 ASR_PORT = 8010
-AUDIO_PORT = 8011        # Swift app streams captured PCM here (WebSocket)
 WEB_PORT = 8765
 
 # Model setup. Weights are not in the .app; these paths are where they land.

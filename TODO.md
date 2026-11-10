@@ -719,8 +719,8 @@ Replaced `index.html` and the browser UI with a native SwiftUI shell in
       `_ui`, `/`, `/setup`, `/builder`, `webbrowser`; `index.html` removed.
 - [x] Verified: `make test` passes; `make app` builds; the .app runs against
       the bundled backend and processes legacy + multi-page PDFs; split/reader
-      highlight works; Follow me can pick any macOS input device (`GET /mics`,
-      `POST /mic`, persisted to `mic.json`, live re-open of the stream).
+      highlight works; Follow me can pick any macOS input device (AVFoundation
+      uniqueID, persisted in preferences, live capture swap).
 - [ ] Potential next: sidebar resize handle, present-mode transition polish,
       per-phrase pitch sync, per-page export bundle.
 
