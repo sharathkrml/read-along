@@ -112,6 +112,25 @@ enum ReadingMath {
         let count = words.filter { $0.page == anchor.page }.count
         return min(words.count, first + min(count, max(0, anchor.wordOffset)))
     }
+
+    /// Index of the word closest to a normalized page point, or nil when no
+    /// word is within `slack` of it. Used by clicks on the original page.
+    static func word(at point: CGPoint, page: Int, words: [Word], slack: CGFloat = 0.05) -> Int? {
+        var best: (index: Int, distance: CGFloat)?
+        for (index, word) in words.enumerated() where word.page == page {
+            guard let box = word.box, box.count == 4 else { continue }
+            let x0 = CGFloat(box[0]), y0 = CGFloat(box[1])
+            let x1 = x0 + CGFloat(box[2]), y1 = y0 + CGFloat(box[3])
+            let dx = max(0, max(x0 - point.x, point.x - x1))
+            let dy = max(0, max(y0 - point.y, point.y - y1))
+            let distance = hypot(dx, dy)
+            if best == nil || distance < best!.distance {
+                best = (index, distance)
+            }
+        }
+        guard let best, best.distance <= slack else { return nil }
+        return best.index
+    }
 }
 
 enum PreparationReason: String, Codable, CaseIterable, Equatable {

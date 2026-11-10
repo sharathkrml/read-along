@@ -905,6 +905,14 @@ final class ReaderModel: ObservableObject {
 
     func jump(word: Int, quiet: Bool = false) { seek(word: word, quiet: quiet) }
 
+    /// A click on the original page: move the reading position to the word there.
+    func jumpToSource(page: Int, point: CGPoint) {
+        guard let word = ReadingMath.word(at: point, page: page, words: pageModel.words) else { return }
+        viewer.textFollows = true
+        viewer.sourceFollows = true
+        jump(word: word)
+    }
+
     func returnToReading() {
         viewer.textFollows = true
         viewer.sourceFollows = true

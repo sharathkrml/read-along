@@ -62,6 +62,7 @@ struct NativeChecks {
         mathChecks()
         loadingChecks()
         transformChecks()
+        sourceClickChecks()
         fixtureModelChecks(fixtures: fixtures)
     }
 
@@ -230,6 +231,25 @@ struct NativeChecks {
         check("transform round trip x", abs(rt.x - p.x) < 0.0001)
         check("transform round trip y", abs(rt.y - p.y) < 0.0001)
         check("screen stroke constant", t.screenStrokeWidth(base: 3) == 3)
+    }
+
+    static func sourceClickChecks() {
+        let words = [
+            Word(text: "one", norm: "one", page: 0, line: 0, box: [0.10, 0.10, 0.10, 0.04]),
+            Word(text: "two", norm: "two", page: 0, line: 0, box: [0.25, 0.10, 0.10, 0.04]),
+            Word(text: "next", norm: "next", page: 1, line: 1, box: [0.10, 0.10, 0.10, 0.04]),
+            Word(text: "unboxed", norm: "unboxed", page: 0, line: 1, box: nil),
+        ]
+        checkEqual("source click inside word",
+                   ReadingMath.word(at: CGPoint(x: 0.15, y: 0.12), page: 0, words: words), 0)
+        checkEqual("source click between words picks nearest",
+                   ReadingMath.word(at: CGPoint(x: 0.22, y: 0.12), page: 0, words: words), 0)
+        checkEqual("source click filters by page",
+                   ReadingMath.word(at: CGPoint(x: 0.15, y: 0.12), page: 1, words: words), 2)
+        checkEqual("source click far from words ignored",
+                   ReadingMath.word(at: CGPoint(x: 0.9, y: 0.9), page: 0, words: words), nil)
+        checkEqual("source click ignores unboxed words",
+                   ReadingMath.word(at: CGPoint(x: 0.35, y: 0.5), page: 0, words: words), nil)
     }
 
     static func fixtureModelChecks(fixtures: URL) {

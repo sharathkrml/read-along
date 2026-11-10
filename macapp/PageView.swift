@@ -40,13 +40,15 @@ struct PageView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            if isPDF {
-                controller.onUserNavigate = { page in
-                    model.viewer.browsedPage = max(0, page - 1)
-                    model.viewer.sourceFollows = false
-                }
-            } else {
-                imageSourceController.onUserNavigate = { _ in }
+            controller.onUserNavigate = { page in
+                model.viewer.browsedPage = max(0, page - 1)
+                model.viewer.sourceFollows = false
+            }
+            controller.onWordClick = { page, point in
+                model.jumpToSource(page: page, point: point)
+            }
+            imageSourceController.onWordClick = { point in
+                model.jumpToSource(page: model.displayPage, point: point)
             }
         }
         .onChange(of: model.displayPage) { _, page in

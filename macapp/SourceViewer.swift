@@ -37,6 +37,7 @@ struct SourceViewerTransform: Equatable {
 final class PDFSourceController: ObservableObject, SourceControlling {
     weak var viewer: PDFSourceViewer?
     var onUserNavigate: ((Int) -> Void)?
+    var onWordClick: ((Int, CGPoint) -> Void)?
     @Published var currentPage: Int = 1
     @Published var totalPages: Int = 1
     @Published var zoomPercent: Int = 100
@@ -217,6 +218,8 @@ final class PDFSourceViewer: NSView {
     private var pendingFit: DispatchWorkItem?
 
     private var clickMonitor: Any?
+    private var clickDown: NSPoint?
+    private var clickDragged = false
     private var scrollObservers: [Any] = []
 
     override init(frame: NSRect) {
@@ -231,12 +234,36 @@ final class PDFSourceViewer: NSView {
         // single-box workspace instead of reading as a separate dark slab.
         pdfView.backgroundColor = ReaderTheme.nsSurface
         addSubview(pdfView)
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+        clickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
             guard let self, let window = self.window, event.window === window else { return event }
             let point = self.convert(event.locationInWindow, from: nil)
-            if self.bounds.contains(point) {
-                window.makeFirstResponder(self.pdfView)
-                MainActor.assumeIsolated { SourceFocus.active = self }
+            let inside = self.bounds.contains(point)
+            switch event.type {
+            case .leftMouseDown:
+                if inside {
+                    window.makeFirstResponder(self.pdfView)
+                    MainActor.assumeIsolated { SourceFocus.active = self }
+                    self.clickDown = point
+                    self.clickDragged = false
+                } else {
+                    self.clickDown = nil
+                }
+            case .leftMouseDragged:
+                if let down = self.clickDown,
+                   hypot(point.x - down.x, point.y - down.y) >= 3 {
+                    self.clickDragged = true
+                }
+            case .leftMouseUp:
+                guard self.clickDown != nil else { return event }
+                self.clickDown = nil
+                guard inside, !self.clickDragged, event.clickCount == 1,
+                      event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+                      self.hitIsViewer(event) else { return event }
+                MainActor.assumeIsolated { self.pageClicked(at: point) }
+            default:
+                break
             }
             return event
         }
@@ -321,6 +348,29 @@ final class PDFSourceViewer: NSView {
         scheduleFitWidth()
     }
 
+    /// A floating toolbar sits above the page; its clicks are not page clicks.
+    private func hitIsViewer(_ event: NSEvent) -> Bool {
+        guard let content = window?.contentView else { return true }
+        let point = content.convert(event.locationInWindow, from: nil)
+        guard let hit = content.hitTest(point) else { return true }
+        if hit is NSScroller { return false }
+        return hit === self || hit.isDescendant(of: self)
+    }
+
+    private func pageClicked(at point: NSPoint) {
+        let viewPoint = pdfView.convert(point, from: self)
+        guard let page = pdfView.page(for: viewPoint, nearest: true),
+              let index = pdfView.document?.index(for: page) else { return }
+        let bounds = page.bounds(for: .cropBox)
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        // Normalized boxes are top-left origin; PDF page space is bottom-left.
+        let p = pdfView.convert(viewPoint, to: page)
+        controller?.onWordClick?(index, CGPoint(
+            x: (p.x - bounds.minX) / bounds.width,
+            y: (bounds.maxY - p.y) / bounds.height
+        ))
+    }
+
     /// Draw the reading marker as PDF annotations so it scrolls and zooms with the page.
     func applyHighlights(current: [[Double]], next: [[Double]], pageIndex: Int) {
         guard current != highlightCurrent || next != highlightNext || pageIndex != highlightPage else { return }
@@ -365,6 +415,7 @@ final class PDFSourceViewer: NSView {
 final class OverlayImageView: NSImageView {
     var currentBoxes: [[Double]] = []
     var nextBoxes: [[Double]] = []
+    var onClick: ((CGPoint) -> Void)?
 
     // Flipped so the scroll view's origin is the top-left: a photo reads
     // top-down and scroll-to-zero lands at the top instead of the bottom.
@@ -403,6 +454,9 @@ final class ImageSourceViewer: NSView {
     var loadedDataHash: Int?
     let scrollView = NSScrollView()
     let imageView = OverlayImageView()
+    private var clickMonitor: Any?
+    private var clickDown: NSPoint?
+    private var clickDragged = false
     override init(frame: NSRect) {
         super.init(frame: frame)
         scrollView.autoresizingMask = [.width, .height]
@@ -413,8 +467,44 @@ final class ImageSourceViewer: NSView {
         scrollView.minMagnification = 0.05
         scrollView.maxMagnification = 4.0
         imageView.imageScaling = .scaleNone
+        imageView.onClick = { [weak self] point in
+            MainActor.assumeIsolated { self?.controller?.onWordClick?(point) }
+        }
         scrollView.documentView = imageView
         addSubview(scrollView)
+        clickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self, let window = self.window, event.window === window else { return event }
+            let viewPoint = self.convert(event.locationInWindow, from: nil)
+            let imagePoint = self.imageView.convert(event.locationInWindow, from: nil)
+            let inside = self.bounds.contains(viewPoint) && self.imageView.bounds.contains(imagePoint)
+            switch event.type {
+            case .leftMouseDown:
+                self.clickDown = inside ? imagePoint : nil
+                self.clickDragged = false
+            case .leftMouseDragged:
+                if let down = self.clickDown,
+                   hypot(imagePoint.x - down.x, imagePoint.y - down.y) >= 3 {
+                    self.clickDragged = true
+                }
+            case .leftMouseUp:
+                guard self.clickDown != nil else { return event }
+                self.clickDown = nil
+                guard inside, !self.clickDragged, event.clickCount == 1,
+                      event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+                      self.hitIsImage(event) else { return event }
+                let up = self.imageView.convert(event.locationInWindow, from: nil)
+                let bounds = self.imageView.bounds
+                guard bounds.width > 0, bounds.height > 0 else { return event }
+                MainActor.assumeIsolated {
+                    self.imageView.onClick?(CGPoint(x: up.x / bounds.width, y: up.y / bounds.height))
+                }
+            default:
+                break
+            }
+            return event
+        }
         // Keep the toolbar's zoom percentage in sync after a pinch/scroll-wheel zoom.
         for name in [NSScrollView.didEndLiveMagnifyNotification] {
             NotificationCenter.default.addObserver(
@@ -422,6 +512,18 @@ final class ImageSourceViewer: NSView {
                 name: name, object: scrollView
             )
         }
+    }
+
+    deinit {
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+    }
+
+    /// A floating toolbar sits above the image; its clicks are not page clicks.
+    private func hitIsImage(_ event: NSEvent) -> Bool {
+        guard let content = window?.contentView else { return true }
+        let point = content.convert(event.locationInWindow, from: nil)
+        guard let hit = content.hitTest(point) else { return true }
+        return hit === imageView || hit.isDescendant(of: imageView)
     }
 
     @objc private func imageMagnificationChanged() {
@@ -481,6 +583,7 @@ final class ImageSourceController: ObservableObject, SourceControlling {
     @Published var totalPages: Int = 1
     @Published var zoomPercent: Int = 100
     var onUserNavigate: ((Int) -> Void)?
+    var onWordClick: ((CGPoint) -> Void)?
 
     func attach(_ v: ImageSourceViewer) {
         guard viewer !== v else { return }
