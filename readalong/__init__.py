@@ -40,7 +40,7 @@ from .cache import attach_word_boxes, clear_pages, load_cache, save_cache  # noq
 from .text import TEXT_SUFFIXES, decode_text, text_to_pdf  # noqa: F401
 
 # --- speech / models / library -------------------------------------------
-from .speech import ASR, fermion_cmd, list_mics, tail  # noqa: F401
+from .speech import ASR, fermion_cmd, tail  # noqa: F401
 from .models import Models  # noqa: F401
 from .library import DocumentStore  # noqa: F401
 
@@ -55,7 +55,7 @@ __all__ = [
     "aligner",  # kept for backwards compatibility
     "annotate_blocks", "attach_word_boxes", "build_model", "build_pages_model",
     "clean_ocr", "clear_pages", "export_image", "fermion_cmd",
-    "group_at", "group_boxes", "image_pages", "list_mics", "load_cache",
+    "group_at", "group_boxes", "image_pages", "load_cache",
     "map_lines", "norm_token", "norm_text", "ocr_lfm3", "ocr_lfm3_many",
     "pdf_lines", "pdf_pages", "process_source", "reading_order",
     "rebase_position", "save_cache", "segment_line", "tail", "tokenize",

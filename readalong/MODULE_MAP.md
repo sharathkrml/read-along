@@ -21,7 +21,7 @@
 #   ocr.py             LFM3 OCR, run_ocr_many/run_ocr, _looks_printed
 #   pdf.py             pdf_lines, pdf_pages, image_pages, process_source
 #   cache.py           save_cache, load_cache, clear_pages, attach_word_boxes
-#   speech.py          fermion_cmd, ASR, tail, list_mics
+#   speech.py          fermion_cmd, ASR, tail
 #   models.py          Models (speech/OCR downloads) + model-dir detection
 #   library.py         DocumentStore (persistent document library)
 #   app.py             App (backend orchestration + HTTP state)

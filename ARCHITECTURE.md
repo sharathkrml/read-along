@@ -122,7 +122,7 @@ read-along/                         repository root
     ocr.py                          LFM3-VL OCR with Vision fallback
     pdf.py                          PDF ingestion (text layer + scanned)
     segment.py                      handwriting ink-gap word segmentation
-    speech.py                       fermion ASR client + mic device list
+    speech.py                       fermion ASR client
     text_model.py                   norm + readable presentation blocks
     vision.py                       macOS Vision line boxes + reading order
     web.py                          ThreadingHTTPServer API for the Swift UI
@@ -459,17 +459,21 @@ load after a reboot compiles shaders and takes 10–40 s.
 
 ### 5.3 Microphone
 
-`sounddevice.RawInputStream`:
+The Swift app owns capture; Python never opens the microphone.
 
-- 16 kHz, mono, `float32`, `blocksize=1600` (100 ms).
-- The callback puts each chunk into a `queue.Queue` and computes RMS for the
-  level meter.
-- An asyncio task drains the queue and sends binary frames.
-- The receive loop calls `App._on_text(text, final)` for partials and finals.
-
-`_run()` owns the asyncio loop in a background thread. `stop()` closes the mic,
-sets `running = False`, and schedules `ws.close()` on the loop. `shutdown()`
-terminates the speech subprocess if the app spawned it.
+- `AudioCapture` runs an `AVCaptureSession` with `AVCaptureAudioDataOutput`
+  (delegate callbacks, not `AVAudioEngine.installTap`, which can raise an
+  uncaught ObjC exception when no input is usable).
+- Audio is requested as 16 kHz mono `float32` PCM and streamed to the backend's
+  `audio_server` WebSocket relay.
+- The picker and capture both use AVFoundation `uniqueID`, exposed through
+  `MicrophoneSelection`. The saved `micUID` survives unplug/replug; the UI only
+  names a device that is attached right now.
+- Hot-plug, app activation, wake, and a periodic reconciliation keep the device
+  list and the live session in sync. A dead session surfaces an error instead of
+  leaving Follow me labelled as listening.
+- The relay forwards each chunk into the ASR send queue. The receive loop calls
+  `App._on_text(text, final)` for partials and finals.
 
 ### 5.4 Startup ordering
 
@@ -967,7 +971,7 @@ internal or personal app; Option B is the long-term distribution path.
 | alignment | `Aligner._score`, `Aligner._anchor`, `Aligner.update` |
 | OCR / boxes | `vision_lines`, `usable_lines`, `map_lines`, `clean_ocr`, `ocr_lfm3`, `ocr_lfm3_many`, `run_ocr`, `run_ocr_many`, `_char_width`, `segment_line`, `_boxes`, `_text_band`, `attach_word_boxes` |
 | documents | `clear_pages`, `pdf_lines`, `pdf_pages`, `image_pages`, `process_source`, `save_cache`, `load_cache` |
-| speech | `ASR` (`ensure`, `start`, `_open_mic`, `_run`, `_session`, `_send`, `stop`, `shutdown`), `tail` |
+| speech | `ASR` (`ensure`, `start`, `_run`, `_session`, `_send`, `stop`, `shutdown`), `tail` |
 | app | `App` (`load`, `_begin_ocr`, `ocr_now`, `start_ocr`, `_run_ocr`, `state`, `start`, `_start_bg`, `stop`, `jump`, `set_script`, `upload`, `shutdown`) |
 | export | `export_image` |
 | web | `Handler` (`do_GET`, `_serve_page`, `do_POST`) |

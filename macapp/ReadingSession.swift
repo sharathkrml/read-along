@@ -59,13 +59,15 @@ struct Prefs: Codable, Equatable {
     var haptic = false
     var pane: ViewPane = .text
     var ocrMode: String = "auto"
+    /// Stable AVFoundation uniqueID; name is kept for the unavailable-device message.
+    var micUID: String? = nil
     var micName: String? = nil
     var readingFont: String? = "sans"
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case appearance, size, guide, sound, haptic, pane, ocrMode, micName, readingFont
+        case appearance, size, guide, sound, haptic, pane, ocrMode, micUID, micName, readingFont
     }
 
     init(from decoder: Decoder) throws {
@@ -79,9 +81,55 @@ struct Prefs: Codable, Equatable {
         pane = (try? c.decode(ViewPane.self, forKey: .pane)) ?? .text
         let savedOCR = (try? c.decode(String.self, forKey: .ocrMode)) ?? "auto"
         ocrMode = ["auto", "fast", "best"].contains(savedOCR) ? savedOCR : "auto"
+        micUID = try? c.decode(String.self, forKey: .micUID)
         micName = try? c.decode(String.self, forKey: .micName)
         // Older installs used serif when this optional preference was absent.
         readingFont = (try? c.decode(String.self, forKey: .readingFont)) ?? "serif"
+    }
+}
+
+/// A native input device. `id` is AVFoundation's stable uniqueID, the same
+/// identity `AudioCapture` uses, so display and capture cannot disagree.
+struct Microphone: Identifiable, Equatable, Hashable {
+    var id: String
+    var name: String
+}
+
+enum MicrophoneSelection {
+    /// Resolve the saved preference against the devices attached right now.
+    /// A saved device that is missing stays saved (so it can return), but the
+    /// selection falls back to system default instead of naming a dead device.
+    static func reconcile(savedUID: String?, legacyName: String?,
+                          devices: [Microphone]) -> (selectedID: String?, migratedUID: String?) {
+        if let savedUID {
+            if devices.contains(where: { $0.id == savedUID }) {
+                return (savedUID, nil)
+            }
+            // A driver update can change uniqueID; the name is the fallback.
+            if let legacyName, !legacyName.isEmpty,
+               let match = devices.first(where: { $0.name == legacyName }) {
+                return (match.id, match.id)
+            }
+            return (nil, nil)
+        }
+        if let legacyName, !legacyName.isEmpty,
+           let match = devices.first(where: { $0.name == legacyName }) {
+            return (match.id, match.id)
+        }
+        return (nil, nil)
+    }
+
+    /// What the bottom-right control should say: the device actually in use,
+    /// never a saved name that no longer resolves.
+    static func displayName(selectedID: String?, defaultID: String?,
+                            devices: [Microphone]) -> String {
+        if let selectedID, let mic = devices.first(where: { $0.id == selectedID }) {
+            return mic.name
+        }
+        if let defaultID, let mic = devices.first(where: { $0.id == defaultID }) {
+            return mic.name
+        }
+        return devices.first?.name ?? "No microphone"
     }
 }
 

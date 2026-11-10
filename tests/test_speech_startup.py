@@ -2,7 +2,9 @@
 """Assert-based checks for speech-engine startup: background warm must stay
 silent and a user start during warm must queue, not swallow the click."""
 
+import tempfile
 import threading
+from pathlib import Path
 
 from readalong import ASR, App, _ensure_asr
 
@@ -21,10 +23,16 @@ def fresh_app():
     app._want_listen = False
     app.aligner = None
     asr = ASR(lambda *a, **k: None, lambda *a, **k: None)
-    # Pretend a healthy server already serves 8010: ensure must fast-path
-    # without spawning anything or reporting a status.
+
+    class OwnedProc:
+        def poll(self):
+            return None
+
+    # Pretend this backend already started a healthy server: ensure must
+    # fast-path without spawning anything or reporting a status.
     asr.healthy = staticmethod(lambda port: True)
-    asr.port = None
+    asr.port = 8010
+    asr.proc = OwnedProc()
     app.asr = asr
     return app
 
@@ -35,6 +43,38 @@ seen = []
 app.asr.on_status = lambda s, m="": seen.append(s)
 app.asr.ensure(notify=False)
 check("silent warm reports nothing", seen, [])
+
+# A healthy server this backend did not start is never adopted: it may still
+# hold its single live stream for a previous app instance.
+import readalong.speech as speech_mod
+
+app = fresh_app()
+app.asr.port = None
+app.asr.proc = None
+spawned = []
+
+
+class SpawnedProc:
+    def poll(self):
+        return None
+
+
+real_popen = speech_mod.subprocess.Popen
+real_free_port = speech_mod.ASR._free_port
+real_data = speech_mod.DATA
+tmp = tempfile.TemporaryDirectory()
+speech_mod.subprocess.Popen = lambda *a, **k: (spawned.append(a), SpawnedProc())[1]
+speech_mod.ASR._free_port = staticmethod(lambda start: 8099)
+speech_mod.DATA = Path(tmp.name)
+try:
+    app.asr.ensure(notify=False)
+finally:
+    speech_mod.subprocess.Popen = real_popen
+    speech_mod.ASR._free_port = real_free_port
+    speech_mod.DATA = real_data
+    tmp.cleanup()
+check("unowned speech server is not adopted", len(spawned), 1)
+check("fresh speech server gets its own port", app.asr.port, 8099)
 
 # Warm success must not wipe a user-requested loading state.
 app.status = "loading"
@@ -86,16 +126,22 @@ check("duplicate start spawns nothing", len(spawned), 0)
 print("\nall speech startup checks passed")
 
 
-# --- audio relay: no keepalive pings, and never the speech server's port ---
+# --- audio relay: no keepalive pings, OS-assigned port, and never the web port ---
 import socket as socket_mod
 
-import readalong.speech as speech_mod
 from readalong import audio_server as audio_mod
-from readalong._config import ASR_PORT, AUDIO_PORT
+from readalong._config import ASR_PORT, WEB_PORT
 from readalong.speech import ASR as ASRClass
 
 
+class _FakeBoundSocket:
+    def getsockname(self):
+        return ("127.0.0.1", 54321)
+
+
 class _FakeServer:
+    sockets = [_FakeBoundSocket()]
+
     def close(self):
         pass
 
@@ -117,6 +163,7 @@ try:
     relay = audio_mod.AudioServer(lambda pcm: None, port=0)
     relay.start()
     check("relay disables keepalive pings", seen.get("ping_interval", "missing"), None)
+    check("relay reports its OS-assigned port", relay.port, 54321)
     relay.stop()
 finally:
     audio_mod.websockets.serve = original_serve
@@ -130,7 +177,7 @@ class _FakeSocket:
         pass
 
     def bind(self, addr):
-        if addr[1] in (ASR_PORT, AUDIO_PORT):
+        if addr[1] in (ASR_PORT, WEB_PORT):
             raise OSError("in use")
 
 
@@ -140,4 +187,4 @@ try:
     got = ASRClass._free_port(ASR_PORT)
 finally:
     speech_mod.socket.socket = original_socket
-check("speech port skips audio relay", got not in (ASR_PORT, AUDIO_PORT), True)
+check("speech port skips taken and web ports", got not in (ASR_PORT, WEB_PORT), True)

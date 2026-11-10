@@ -63,6 +63,7 @@ struct NativeChecks {
         loadingChecks()
         transformChecks()
         sourceClickChecks()
+        microphoneChecks()
         fixtureModelChecks(fixtures: fixtures)
     }
 
@@ -145,13 +146,10 @@ struct NativeChecks {
         check("model status ready is idle", !ModelStatus(state: "ready").isBusy)
         check("model status missing is idle", !ModelStatus(state: "missing").isBusy)
 
-        // Microphones use the "default" coding key.
-        let mics = try! decode(Microphones.self, """
-        {"default": 1, "devices": [{"id": 0, "name": "Built-in", "channels": 2},
-                                   {"id": 1, "name": "USB Mic", "channels": 1}]}
-        """)
-        checkEqual("microphone default", mics.defaultDevice, 1)
-        checkEqual("microphone count", mics.devices.count, 2)
+        // Microphone preferences keep the old name and gain a stable uniqueID.
+        let legacyMic = try! decode(Prefs.self, #"{"micName": "USB Mic"}"#)
+        checkEqual("prefs legacy mic name", legacyMic.micName, "USB Mic")
+        checkEqual("prefs mic uid absent", legacyMic.micUID, nil)
 
         // Preferences: defaults from empty payload, backward compatibility, clamping.
         let defaults = try! decode(Prefs.self, "{}")
@@ -172,6 +170,68 @@ struct NativeChecks {
         checkEqual("prefs size floor", clampedLow.size, 16)
         let badEnums = try! decode(Prefs.self, #"{"pane": "bogus"}"#)
         checkEqual("prefs unknown pane falls back", badEnums.pane, .text)
+    }
+
+    // MARK: microphone selection
+
+    static func microphoneChecks() {
+        let builtIn = Microphone(id: "builtin", name: "MacBook Pro Microphone")
+        let usb = Microphone(id: "usb", name: "USB Mic")
+        let devices = [builtIn, usb]
+
+        let saved = MicrophoneSelection.reconcile(
+            savedUID: "usb", legacyName: nil, devices: devices)
+        checkEqual("mic saved uid selected", saved.selectedID, "usb")
+        checkEqual("mic saved uid no migration", saved.migratedUID, nil)
+
+        let missing = MicrophoneSelection.reconcile(
+            savedUID: "gone", legacyName: nil, devices: devices)
+        checkEqual("mic missing saved falls back to default", missing.selectedID, nil)
+        checkEqual("mic missing saved keeps no migration", missing.migratedUID, nil)
+
+        let changedUID = MicrophoneSelection.reconcile(
+            savedUID: "gone", legacyName: "USB Mic", devices: devices)
+        checkEqual("mic changed uid matches name", changedUID.selectedID, "usb")
+        checkEqual("mic changed uid migrates", changedUID.migratedUID, "usb")
+
+        let legacy = MicrophoneSelection.reconcile(
+            savedUID: nil, legacyName: "USB Mic", devices: devices)
+        checkEqual("mic legacy name selects device", legacy.selectedID, "usb")
+        checkEqual("mic legacy name migrates uid", legacy.migratedUID, "usb")
+
+        let legacyGone = MicrophoneSelection.reconcile(
+            savedUID: nil, legacyName: "Old USB Mic", devices: devices)
+        checkEqual("mic legacy missing falls back", legacyGone.selectedID, nil)
+        checkEqual("mic legacy missing no migration", legacyGone.migratedUID, nil)
+
+        let none = MicrophoneSelection.reconcile(
+            savedUID: nil, legacyName: nil, devices: devices)
+        checkEqual("mic no preference uses default", none.selectedID, nil)
+
+        let empty = MicrophoneSelection.reconcile(
+            savedUID: "usb", legacyName: nil, devices: [])
+        checkEqual("mic empty list falls back", empty.selectedID, nil)
+
+        checkEqual("mic label selected",
+                   MicrophoneSelection.displayName(
+                    selectedID: "usb", defaultID: "builtin", devices: devices),
+                   "USB Mic")
+        checkEqual("mic label system default",
+                   MicrophoneSelection.displayName(
+                    selectedID: nil, defaultID: "builtin", devices: devices),
+                   "MacBook Pro Microphone")
+        checkEqual("mic label dead selection uses default",
+                   MicrophoneSelection.displayName(
+                    selectedID: "gone", defaultID: "builtin", devices: devices),
+                   "MacBook Pro Microphone")
+        checkEqual("mic label no default",
+                   MicrophoneSelection.displayName(
+                    selectedID: nil, defaultID: nil, devices: devices),
+                   "MacBook Pro Microphone")
+        checkEqual("mic label no devices",
+                   MicrophoneSelection.displayName(
+                    selectedID: nil, defaultID: nil, devices: []),
+                   "No microphone")
     }
 
     // MARK: cursor/progress math

@@ -165,14 +165,6 @@ struct BackendClient {
         return try await get("source/\(docID)")
     }
 
-    func mics() async throws -> Microphones {
-        try JSONDecoder().decode(Microphones.self, from: try await get("mics"))
-    }
-
-    func setMic(_ device: Int?) async throws {
-        _ = try await post("mic", body: ["device": device ?? NSNull()])
-    }
-
     func finishSetup() async throws {
         _ = try await post("setup/finish")
     }

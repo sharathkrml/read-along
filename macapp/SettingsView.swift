@@ -57,7 +57,7 @@ struct SettingsView: View {
         .task(id: category) {
             if category == .voice {
                 permission = AVCaptureDevice.authorizationStatus(for: .audio)
-                await model.refreshMicrophones()
+                model.refreshMicrophonesAndSync()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -227,21 +227,19 @@ struct SettingsView: View {
             SettingsRow("Input device", detail: "Used when you press Follow me.") {
                 Picker("Input device", selection: Binding(
                     get: { model.selectedMicID },
-                    set: { id in model.selectMic(model.microphones.devices.first { $0.id == id }) }
+                    set: { id in model.selectMic(model.microphones.first { $0.id == id }) }
                 )) {
-                    Text("System default").tag(Int?.none)
-                    ForEach(model.microphones.devices) { mic in
-                        Text(mic.name).tag(Int?.some(mic.id))
-                    }
-                    if let id = model.selectedMicID, model.selectedMicrophone == nil {
-                        Text("Saved microphone · unavailable").tag(Int?.some(id))
+                    Text("System default").tag(String?.none)
+                    ForEach(model.microphones) { mic in
+                        Text(mic.name).tag(String?.some(mic.id))
                     }
                 }
                 .labelsHidden()
                 .tint(ReaderTheme.secondaryText)
                 .frame(width: 220)
             }
-            if let name = model.prefs.micName, !model.microphones.devices.contains(where: { $0.name == name }) {
+            if model.savedMicUnavailable,
+               let name = model.prefs.micName, !name.isEmpty {
                 Text("“\(name)” is unavailable. Reconnect it or choose another input device.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(ReaderTheme.warning)

@@ -86,6 +86,9 @@ final class BackendService: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["PYTHONPATH"] = site.path
         env["PYTHONUNBUFFERED"] = "1"
+        // Never write .pyc into the signed bundle: a runtime write invalidates
+        // its seal and can stall the first launch behind security scans.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["READALONG_DATA"] = dataURL.path
         env["READALONG_FERMION"] = backendDir.appendingPathComponent("fermion_main.py").path
         process.environment = env
