@@ -527,10 +527,16 @@ final class ImageSourceViewer: NSView {
     }
 
     @objc private func imageMagnificationChanged() {
+        // Pinch / wheel zoom is a manual choice: stop refitting on resize.
+        userAdjustedZoom = true
         controller?.sync()
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// True once the user has manually zoomed (pinch, wheel, or the zoom in/out
+    /// buttons). While false the image keeps refitting to the window width so it
+    /// looks right at any size; once true we stop fighting the user's choice.
+    var userAdjustedZoom = false
     private var didFit = false
 
     override func layout() {
@@ -543,24 +549,31 @@ final class ImageSourceViewer: NSView {
         }
     }
 
+    /// Fit the image to the window width. Runs on every layout so a resize
+    /// refits the image instead of leaving it at an old magnification. The very
+    /// first fit also scrolls to the top; later resizes keep the scroll position.
     private func fitIfNeeded() {
-        guard !didFit, let image = imageView.image,
+        guard !userAdjustedZoom, let image = imageView.image,
               image.size.width > 0, image.size.height > 0 else { return }
         let available = scrollView.bounds.size
         guard available.width > 1, available.height > 1 else { return }
         // Default to full width so a tall photo reads like the PDF column
         // instead of being shrunk to fit the whole pane.
-        let fit = (available.width - 2) / image.size.width
-        scrollView.magnification = max(0.05, min(4, fit))
-        scrollView.contentView.scroll(to: .zero)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
-        didFit = true
+        let fit = max(0.05, min(4, (available.width - 2) / image.size.width))
+        guard scrollView.magnification != fit else { return }
+        scrollView.magnification = fit
+        if !didFit {
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            didFit = true
+        }
     }
 
     func setImage(_ image: NSImage) {
         imageView.image = image
         imageView.frame = NSRect(origin: .zero, size: image.size)
         didFit = false
+        userAdjustedZoom = false
         needsLayout = true
         DispatchQueue.main.async { [weak self] in
             self?.needsLayout = true
@@ -606,11 +619,13 @@ final class ImageSourceController: ObservableObject, SourceControlling {
     func zoomOut() {
         guard let v = viewer else { return }
         v.scrollView.magnification = max(v.scrollView.minMagnification, v.scrollView.magnification / 1.2)
+        v.userAdjustedZoom = true
         sync()
     }
     func zoomIn() {
         guard let v = viewer else { return }
         v.scrollView.magnification = min(v.scrollView.maxMagnification, v.scrollView.magnification * 1.2)
+        v.userAdjustedZoom = true
         v.needsLayout = true
         v.layoutSubtreeIfNeeded()
         sync()
