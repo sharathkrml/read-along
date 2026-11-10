@@ -250,6 +250,14 @@ def list_mics() -> dict:
 
     payload = {"default": None, "devices": []}
     try:
+        # PortAudio caches the device list, so a USB/Bluetooth mic that was
+        # unplugged keeps showing up until PortAudio is re-initialized.
+        # Terminating and re-querying forces a fresh CoreAudio enumeration.
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            pass
         devices = sd.query_devices()
         default = sd.default.device[0]
         try:
