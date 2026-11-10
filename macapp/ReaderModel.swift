@@ -111,6 +111,7 @@ final class ReaderModel: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private let imageCache = NSCache<NSString, NSImage>()
     private let sourceCache = NSCache<NSString, NSData>()
+    private var deviceObservers: [NSObjectProtocol] = []
     private var pageImageTask: Task<Void, Never>?
     private var pageImageKey = ""
     private var pageImagesDocID = ""
@@ -148,6 +149,23 @@ final class ReaderModel: ObservableObject {
         }
         imageCache.totalCostLimit = 48 * 1024 * 1024
         imageCache.countLimit = 5
+        // If a microphone is unplugged mid-reading, follow the user to another
+        // input instead of leaving Follow me stuck on a dead device.
+        deviceObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleMicrophoneDisconnected(notification)
+                }
+            }
+        )
+    }
+
+    deinit {
+        deviceObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     private static func savePrefs(_ preferences: Prefs) {
@@ -1333,6 +1351,42 @@ final class ReaderModel: ObservableObject {
                 showToast(error.localizedDescription, isError: true)
             }
         }
+    }
+
+    /// An input microphone was disconnected. Pick a still-available device and,
+    /// if Follow me is active, restart capture on the new system-default input
+    /// so reading aloud keeps working instead of going silent.
+    private func handleMicrophoneDisconnected(_ notification: Notification) {
+        guard let device = notification.object as? AVCaptureDevice,
+              device.hasMediaType(.audio) else { return }
+        Task { await recoverFromMicrophoneDisconnect(device: device) }
+    }
+
+    private func recoverFromMicrophoneDisconnect(device: AVCaptureDevice) async {
+        // Re-enumerate so the picker reflects what is still attached.
+        await refreshMicrophones()
+        // Prefer the remembered mic if it survived, otherwise fall back to the
+        // system default (nil) so capture picks up whatever input remains.
+        if let name = prefs.micName, !name.isEmpty,
+           let surviving = microphones.devices.first(where: { $0.name == name }) {
+            selectedMicID = surviving.id
+        } else {
+            selectedMicID = nil
+        }
+        _ = try? await client?.setMic(selectedMicID)
+        showToast("Microphone disconnected — switched to \(selectedMicLabel)", isError: false)
+        // If we were capturing, restart the session on the new default input.
+        guard transportState.isActive, let audioURL else { return }
+        audioCapture.stop()
+        do {
+            try await audioCapture.start(to: audioURL)
+        } catch {
+            transportState = .failed
+            showToast("Could not restart microphone capture: \(error.localizedDescription)", isError: true)
+            return
+        }
+        transportState = .listening
+        feedback(.light)
     }
 
     // MARK: feedback + toasts
