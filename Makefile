@@ -41,8 +41,7 @@ run: app
 	open "$(APP)"
 
 dev:
-	@echo "Native UI: run 'make app' then open build/ReadAlong.app."
-	@echo "Backend only (for UI iteration): .venv/bin/python readalong.py --port 8765"
+	.venv/bin/python readalong.py --port 8765
 
 test:
 	.venv/bin/python -m tests.test_align

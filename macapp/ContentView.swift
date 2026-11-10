@@ -128,6 +128,7 @@ private struct StudioHeader: View {
     @Binding var sidebarVisible: Bool
     @State private var showAppearance = false
     @State private var showDetails = false
+    @State private var confirmRecovery = false
 
     private var hasDocument: Bool {
         model.activeDoc != nil || model.hasSource || model.documentLoadingMessage != nil
@@ -211,6 +212,12 @@ private struct StudioHeader: View {
                 }
                 .disabled(!hasWords || model.presentVisible)
 
+                HeaderIconButton(symbol: "arrow.triangle.2.circlepath",
+                                 help: "Redo text recognition (OCR)") {
+                    confirmRecovery = true
+                }
+                .disabled(model.isProcessing || model.documentLoadingMessage != nil)
+
                 Button {
                     showAppearance.toggle()
                 } label: {
@@ -242,6 +249,13 @@ private struct StudioHeader: View {
                 ReaderTheme.canvas
                 WindowDragArea()
             }
+        }
+        .confirmationDialog("Redo text recognition for this document?", isPresented: $confirmRecovery,
+                            titleVisibility: .visible) {
+            Button("Redo text recognition", role: .destructive) { model.reOCR() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This reruns OCR on the whole document and may replace text corrections. Your original file stays unchanged.")
         }
     }
 
@@ -1043,11 +1057,19 @@ private struct ReaderSplitAutosave: NSViewRepresentable {
     let documentID: String
 
     func makeNSView(context: Context) -> Probe { Probe(name: documentID) }
-    func updateNSView(_ view: Probe, context: Context) { view.name = documentID; view.needsLayout = true }
+    func updateNSView(_ view: Probe, context: Context) {
+        // Force layout only until the split is configured. Doing it on every
+        // poll/OCR update re-enters the hosting view's layout pass.
+        guard view.name != documentID || !view.isConfigured else { return }
+        view.name = documentID
+        view.needsLayout = true
+    }
 
     final class Probe: NSView {
         var name: String
         private var configuredName: String?
+
+        var isConfigured: Bool { configuredName == name }
 
         init(name: String) { self.name = name; super.init(frame: .zero) }
         required init?(coder: NSCoder) { nil }

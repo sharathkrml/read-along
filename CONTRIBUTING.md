@@ -25,7 +25,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 make dev   # backend-only: python readalong.py --port 8765
-make test  # aligner + library checks
+make test  # Python + native checks
 ```
 
 Build the full app (Apple Silicon, Xcode CLI tools, `uv`):
