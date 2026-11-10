@@ -171,6 +171,21 @@ final class ReaderModel: ObservableObject {
         [setup.speech, setup.ocr].compactMap { $0 }.contains { $0.isBusy }
     }
 
+    /// The Phonon-2.5 speech model is installed and Follow me can start without a download.
+    var speechModelReady: Bool {
+        state.speech_ready == true || setup.speech?.state == "ready"
+    }
+
+    /// The speech model is not installed and nothing is being downloaded, so Follow me is blocked.
+    var speechModelMissing: Bool {
+        !speechModelReady && setup.speech?.state.map { ["missing", "error", "interrupted", "canceled"].contains($0) } ?? false
+    }
+
+    /// The speech model is currently being downloaded or verified.
+    var speechModelDownloading: Bool {
+        setup.speech?.state.map { ["preparing", "downloading", "verifying", "installing"].contains($0) } ?? false
+    }
+
     var hasSource: Bool { activeDoc != nil || sourceURL != nil }
     var canRead: Bool { !pageModel.words.isEmpty && documentLoadingMessage == nil }
     var isProcessing: Bool {
@@ -972,6 +987,7 @@ final class ReaderModel: ObservableObject {
         if state.status == "loading" { return }
         if state.speech_ready == false {
             modelSetupKey = "speech"
+            showToast("Follow me needs the speech model — get it in Settings, then start again.", isError: false)
             return
         }
         // English-only disclosure

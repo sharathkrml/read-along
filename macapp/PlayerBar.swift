@@ -53,6 +53,8 @@ struct PlayerBar: View {
             transport
             Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
             status
+            Rectangle().fill(ReaderTheme.hairlineStrong).frame(width: 1, height: 20)
+            modelReadiness
             Spacer(minLength: 10)
             progress
             if !positionContext.isEmpty {
@@ -126,9 +128,96 @@ struct PlayerBar: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .help(statusText)
+            micPermissionChip
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+
+    /// Mic-permission chip shown when Follow me is idle and the mic hasn't been
+    /// authorized yet, so the user knows why the mic won't light up.
+    @ViewBuilder
+    private var micPermissionChip: some View {
+        if microphoneIsOn {
+            EmptyView()
+        } else if case .notDetermined = model.micPermissionState {
+            permissionChip("Mic access not requested", symbol: "mic.slash", color: ReaderTheme.warning)
+        } else if case .denied = model.micPermissionState {
+            permissionChip("Mic access denied", symbol: "mic.slash", color: ReaderTheme.warning)
+        } else if case .restricted = model.micPermissionState {
+            permissionChip("Mic access restricted", symbol: "mic.slash", color: ReaderTheme.warning)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func permissionChip(_ label: String, symbol: String, color: Color) -> some View {
+        Button {
+            if model.micPermissionState == .denied {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(color)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .frame(minHeight: 22)
+        .background(ReaderTheme.canvas.opacity(0.55), in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(color.opacity(0.5), lineWidth: 1)
+        }
+        .contentShape(Capsule(style: .continuous))
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityHint(model.micPermissionState == .denied ? "Open System Settings microphone privacy" : "Request microphone access")
+    }
+
+    /// Speech-model readiness chip shown in the player bar so the user can tell
+    /// at a glance whether Follow me can start, is downloading, or is blocked.
+    private var modelReadiness: some View {
+        Group {
+            if model.speechModelDownloading {
+                readinessChip("Downloading model", symbol: "arrow.down.circle", color: ReaderTheme.accent)
+            } else if model.speechModelReady {
+                readinessChip("Speech model ready", symbol: "checkmark.circle.fill", color: ReaderTheme.success)
+            } else if model.speechModelMissing {
+                readinessChip("Speech model needed", symbol: "exclamationmark.circle", color: ReaderTheme.warning)
+                    .onTapGesture { model.modelSetupKey = "speech" }
+            } else {
+                readinessChip("Checking model…", symbol: "clock", color: ReaderTheme.secondaryText)
+            }
+        }
+    }
+
+    private func readinessChip(_ label: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(color)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(color)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 22)
+        .background(ReaderTheme.canvas.opacity(0.55), in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(color.opacity(0.5), lineWidth: 1)
+        }
+        .contentShape(Capsule(style: .continuous))
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private var progress: some View {
@@ -322,10 +411,18 @@ struct PlayerBar: View {
         }
         if !model.transportSubtitle.isEmpty { return model.transportSubtitle }
         switch model.transportState {
-        case .preparing: return "Preparing the speech engine…"
+        case .preparing:
+            if model.speechModelMissing {
+                return "Speech model not installed — get it in Settings to read aloud"
+            }
+            return "Warming up the speech engine…"
         case .waitingForText: return "Waiting for the next page…"
         case .stopping: return "Stopping…"
-        case .failed: return "Couldn’t start. Try again or choose another input."
+        case .failed:
+            if model.speechModelMissing {
+                return "Follow me couldn't start — the speech model needs to be installed"
+            }
+            return "Couldn't start. Try again or choose another input."
         case .paused: return "Paused · your place is saved"
         case .playing, .listening: return "Listening"
         case .idle: return model.isProcessing ? "Available text · more pages are being prepared" : "Your words. Your pace."
