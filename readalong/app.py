@@ -494,9 +494,15 @@ class App:
             texts = [line.strip() for line in text.splitlines() if line.strip()]
             lines = [{"text": line, "box": None} for line in texts]
             matcher = difflib.SequenceMatcher(None, [line["text"] for line in old], texts, autojunk=False)
-            for a0, b0, length in matcher.get_matching_blocks():
-                for offset in range(length):
-                    lines[b0 + offset] = dict(old[a0 + offset])
+            for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+                if tag == "equal":
+                    for offset in range(a1 - a0):
+                        lines[b0 + offset] = dict(old[a0 + offset])
+                elif tag == "replace" and a1 - a0 == b1 - b0:
+                    # A corrected line keeps its old geometry, so its words can
+                    # still be cut from the same ink and highlighted on the page.
+                    for offset in range(a1 - a0):
+                        lines[b0 + offset] = {**old[a0 + offset], "text": texts[b0 + offset]}
             pages = [dict(p) for p in self.pages]
             pages[page] = {**pages[page], "lines": lines,
                            "reading_status": "ready" if any(norm_text(line) for line in texts) else "empty"}

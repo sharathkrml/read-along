@@ -5,7 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from readalong import App, DocumentStore, load_cache, save_cache
 
@@ -138,5 +138,36 @@ with tempfile.TemporaryDirectory(prefix="readalong-cache-") as tmp:
     old["pages"][0]["lines"][0]["box"] = None
     cache.write_text(json.dumps(old))
     check("unboxed v2 cache reprocesses", load_cache(source), None)
+
+with tempfile.TemporaryDirectory(prefix="readalong-corrections-") as tmp:
+    root = Path(tmp)
+    store = DocumentStore(root)
+    doc = store.create("Handwritten note.jpg", ".jpg")
+    source = store.source(doc["id"])
+    Image.new("RGB", (400, 200), "white").save(source)
+    pages_dir = store.path(doc["id"]) / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (400, 200), "white")
+    draw = ImageDraw.Draw(image)
+    for y in (30, 110):
+        draw.rectangle([40, y, 100, y + 20], fill="black")
+        draw.rectangle([130, y, 190, y + 20], fill="black")
+    image.save(pages_dir / "p000.jpg")
+    save_cache(source, [{
+        "image": "p000.jpg", "width": 400, "height": 200,
+        "lines": [
+            {"text": "hello wrld", "box": [0.08, 0.10, 0.50, 0.20]},
+            {"text": "second line", "box": [0.08, 0.50, 0.50, 0.20]},
+        ],
+    }])
+    store.update(doc["id"], status="ready")
+    app = App(source, store)
+    check("correction document loads", app.load(), True)
+    app.set_script(0, "hello world\nsecond line")
+    corrected = app.model["lines"][0]
+    check("corrected line keeps its box", corrected["box"], [0.08, 0.10, 0.50, 0.20])
+    boxed = [w for w in app.model["words"] if w["line"] == 0]
+    check("corrected words are boxed", len(boxed) == 2 and all(w.get("box") for w in boxed), True)
+    check("corrected box is saved", app.pages[0]["lines"][0]["box"], [0.08, 0.10, 0.50, 0.20])
 
 print("\nall library checks passed")
