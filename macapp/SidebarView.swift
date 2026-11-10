@@ -1,16 +1,23 @@
+import AppKit
 import SwiftUI
+
+private let libraryListSpace = "libraryList"
+
+private struct LibraryRowFrames: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
 
 struct SidebarView: View {
     @EnvironmentObject private var model: ReaderModel
-    @State private var query = ""
-
-    private var matches: [Document] {
-        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !search.isEmpty else { return model.library.documents }
-        return model.library.documents.filter {
-            $0.title.localizedStandardContains(search) || ($0.file_name?.localizedStandardContains(search) ?? false)
-        }
-    }
+    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var dragRect: CGRect?
+    @State private var dragAdditive = false
+    /// A marquee's mouse-up can still reach the row button underneath it;
+    /// ignore row clicks for a moment so a drag never opens a document.
+    @State private var lastDragActivityAt: Date?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,25 +28,99 @@ struct SidebarView: View {
 
             if model.library.documents.isEmpty {
                 emptyLibrary
-            } else if matches.isEmpty {
+            } else if model.filteredDocuments.isEmpty {
                 noMatches
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(Array(matches.enumerated()), id: \.element.id) { entry in
-                            SidebarRow(doc: entry.element, index: entry.offset + 1)
+                GeometryReader { viewport in
+                    ScrollView {
+                        ZStack(alignment: .top) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture { model.clearDocumentSelection() }
+                            LazyVStack(spacing: 3) {
+                                ForEach(Array(model.filteredDocuments.enumerated()), id: \.element.id) { entry in
+                                    SidebarRow(doc: entry.element, index: entry.offset + 1) { modifiers in
+                                        handleRowClick(entry.element, modifiers: modifiers)
+                                    }
+                                    .background {
+                                        GeometryReader { proxy in
+                                            Color.clear.preference(
+                                                key: LibraryRowFrames.self,
+                                                value: [entry.element.id: proxy.frame(in: .named(libraryListSpace))]
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 8)
                         }
+                        .frame(minHeight: viewport.size.height, alignment: .top)
+                        .coordinateSpace(name: libraryListSpace)
+                        .onPreferenceChange(LibraryRowFrames.self) { rowFrames = $0 }
+                        .overlay { marquee }
+                        .simultaneousGesture(selectionDrag)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
+                    .scrollIndicators(.never)
                 }
-                .scrollIndicators(.never)
             }
 
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.sidebar)
+    }
+
+    private func handleRowClick(_ doc: Document, modifiers: NSEvent.ModifierFlags) {
+        // shortcut: 0.2 s guard after any drag movement; replace with a proper
+        // mouse-down tracker if it ever swallows a real click.
+        if let active = lastDragActivityAt, Date().timeIntervalSince(active) < 0.2 {
+            lastDragActivityAt = nil
+            return
+        }
+        model.selectDocument(doc.id,
+                             command: modifiers.contains(.command),
+                             shift: modifiers.contains(.shift))
+    }
+
+    /// Rubber-band selection over the rows. A plain drag replaces the
+    /// selection; Cmd-drag adds to it.
+    private var selectionDrag: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(libraryListSpace))
+            .onChanged { value in
+                if dragRect == nil {
+                    dragAdditive = NSEvent.modifierFlags.contains(.command)
+                }
+                let rect = CGRect(x: min(value.startLocation.x, value.location.x),
+                                  y: min(value.startLocation.y, value.location.y),
+                                  width: abs(value.location.x - value.startLocation.x),
+                                  height: abs(value.location.y - value.startLocation.y))
+                dragRect = rect
+                // shortcut: rows are only laid out while visible, so a drag
+                // cannot select past the viewport; add auto-scroll when
+                // libraries routinely exceed one screen.
+                let hits = Set(rowFrames.filter { $0.value.intersects(rect) }.keys)
+                model.selectDocumentsFromDrag(hits, additive: dragAdditive)
+                lastDragActivityAt = Date()
+            }
+            .onEnded { _ in
+                dragRect = nil
+                lastDragActivityAt = Date()
+            }
+    }
+
+    @ViewBuilder private var marquee: some View {
+        if let rect = dragRect {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(ReaderTheme.accent.opacity(0.08))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(ReaderTheme.accent.opacity(0.4), lineWidth: 1)
+                }
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .allowsHitTesting(false)
+        }
     }
 
     private var header: some View {
@@ -64,12 +145,12 @@ struct SidebarView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(ReaderTheme.tertiaryText)
                 .accessibilityHidden(true)
-            TextField("Search documents", text: $query)
+            TextField("Search documents", text: $model.libraryQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .accessibilityLabel("Search document titles and file names")
-            if !query.isEmpty {
-                Button { query = "" } label: {
+            if !model.libraryQuery.isEmpty {
+                Button { model.libraryQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
                 }
@@ -92,6 +173,25 @@ struct SidebarView: View {
     private var footer: some View {
         VStack(spacing: 8) {
             Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
+            if !model.selectedDocumentIDs.isEmpty {
+                HStack(spacing: 10) {
+                    Text("\(model.selectedDocumentIDs.count) selected")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ReaderTheme.primaryText)
+                    Spacer(minLength: 0)
+                    Button("Clear") { model.clearDocumentSelection() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                        .help("Clear selection")
+                    Button("Delete…", role: .destructive) { model.requestDeleteSelectedDocuments() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ReaderTheme.warning)
+                        .help("Remove the selected documents from the library (Delete)")
+                }
+                .padding(.horizontal, 4)
+            }
             if downloadCount > 0 {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
@@ -176,7 +276,7 @@ struct SidebarView: View {
             Text("Search a title or file name.")
                 .font(.system(size: 11))
                 .foregroundStyle(ReaderTheme.secondaryText)
-            Button("Clear search") { query = "" }
+            Button("Clear search") { model.libraryQuery = "" }
                 .buttonStyle(StudioSecondaryButtonStyle())
                 .padding(.top, 4)
         }
@@ -189,9 +289,11 @@ struct SidebarRow: View {
     @EnvironmentObject private var model: ReaderModel
     let doc: Document
     let index: Int
+    let onActivate: (NSEvent.ModifierFlags) -> Void
     @State private var hovered = false
 
     private var selected: Bool { model.library.active == doc.id }
+    private var picked: Bool { model.selectedDocumentIDs.contains(doc.id) }
     private var opening: Bool { model.openingDocumentID == doc.id }
     /// Live progress is only valid once the page model and backend state
     /// both belong to this document. Before then, reuse the row's stored
@@ -216,12 +318,22 @@ struct SidebarRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { model.openDocument(doc.id) } label: {
+            Button {
+                onActivate(NSEvent.modifierFlags)
+            } label: {
                 HStack(spacing: 10) {
-                    Text(String(format: "%02d", index))
-                        .font(ReaderTheme.numeral(9.5, weight: .medium))
-                        .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.tertiaryText)
-                        .frame(width: 18, alignment: .leading)
+                    Group {
+                        if picked {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(ReaderTheme.accent)
+                        } else {
+                            Text(String(format: "%02d", index))
+                                .font(ReaderTheme.numeral(9.5, weight: .medium))
+                                .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.tertiaryText)
+                        }
+                    }
+                    .frame(width: 18, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(doc.title)
@@ -264,7 +376,8 @@ struct SidebarRow: View {
         }
         .background {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(selected ? ReaderTheme.selection : (hovered ? ReaderTheme.raised.opacity(0.7) : Color.clear))
+                .fill(picked ? ReaderTheme.accentSoft
+                      : (selected ? ReaderTheme.selection : (hovered ? ReaderTheme.raised.opacity(0.7) : Color.clear)))
         }
         .overlay(alignment: .leading) {
             if selected {
@@ -275,7 +388,10 @@ struct SidebarRow: View {
             }
         }
         .overlay {
-            if selected {
+            if picked {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(ReaderTheme.accent.opacity(0.45), lineWidth: 1)
+            } else if selected {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
             }
@@ -283,6 +399,7 @@ struct SidebarRow: View {
         .onHover { hovered = $0 }
         .contextMenu { rowActions }
         .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(picked ? .isSelected : [])
     }
 
     @ViewBuilder private var trailing: some View {
@@ -338,10 +455,10 @@ struct SidebarRow: View {
     }
 
     @ViewBuilder private var rowActions: some View {
-        Button("Open") { model.openDocument(doc.id) }
+        Button("Open") { model.selectDocument(doc.id, command: false, shift: false) }
         Button("Rename…") { model.pendingRename = doc }
         Divider()
-        Button("Delete…", role: .destructive) { model.pendingDelete = doc }
+        Button("Delete…", role: .destructive) { model.pendingDelete = [doc] }
     }
 }
 

@@ -140,6 +140,9 @@ struct NativeChecks {
         checkEqual("setup speech state", setup.speech?.state, "downloading")
         checkEqual("setup speech cancellable", setup.speech?.can_cancel, true)
         checkEqual("setup ocr state", setup.ocr?.state, "ready")
+        check("model status downloading is busy", ModelStatus(state: "downloading").isBusy)
+        check("model status ready is idle", !ModelStatus(state: "ready").isBusy)
+        check("model status missing is idle", !ModelStatus(state: "missing").isBusy)
 
         // Microphones use the "default" coding key.
         let mics = try! decode(Microphones.self, """

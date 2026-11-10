@@ -9,14 +9,13 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dropTargeted = false
     @State private var dropError: String?
-    @State private var sidebarVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
-            StudioHeader(sidebarVisible: $sidebarVisible)
+            StudioHeader(sidebarVisible: $model.sidebarVisible)
             Rectangle().fill(ReaderTheme.hairline).frame(height: 1)
             HStack(spacing: 0) {
-                if sidebarVisible {
+                if model.sidebarVisible {
                     SidebarView()
                         .frame(width: 266)
                         .transition(.move(edge: .leading).combined(with: .opacity))
@@ -38,7 +37,7 @@ struct ContentView: View {
             ReaderTheme.validateContrast()
             #endif
         }
-        .animation(.easeInOut(duration: 0.18), value: sidebarVisible)
+        .animation(.easeInOut(duration: 0.18), value: model.sidebarVisible)
         .sheet(isPresented: $model.showEdit) {
             EditSheet()
                 .environmentObject(model)
@@ -103,16 +102,20 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var deleteAlert: some View {
-        if let doc = model.pendingDelete {
+        if let docs = model.pendingDelete {
+            let single = docs.count == 1
             Color.clear.frame(width: 0, height: 0)
-                .alert("Delete “\(doc.title)” ?", isPresented: Binding(
+                .alert(single ? "Delete “\(docs[0].title)” ?" : "Delete \(docs.count) documents?",
+                       isPresented: Binding(
                     get: { model.pendingDelete != nil },
                     set: { if !$0 { model.pendingDelete = nil } }
                 )) {
                     Button("Cancel", role: .cancel) { model.pendingDelete = nil }
-                    Button("Delete", role: .destructive) { model.deleteDocument(doc) }
+                    Button("Delete", role: .destructive) { model.deleteDocuments(docs) }
                 } message: {
-                    Text("This removes Read Along’s managed copy and cached reading data. Your original file elsewhere on this Mac is not changed.")
+                    Text(single
+                         ? "This removes Read Along’s managed copy and cached reading data. Your original file elsewhere on this Mac is not changed."
+                         : "This removes Read Along’s managed copies and cached reading data for \(docs.count) documents. Your original files elsewhere on this Mac are not changed.")
                 }
         }
     }
@@ -296,8 +299,8 @@ private struct ViewModeControl: View {
 
     var body: some View {
         HStack(spacing: 1) {
-            segment(.text, symbol: "text.alignleft", help: "Text only (⌘1)", enabled: textEnabled)
-            segment(.original, symbol: "doc.richtext", help: "Original only (⌘2)", enabled: true)
+            segment(.original, symbol: "doc.richtext", help: "Original only (⌘1)", enabled: true)
+            segment(.text, symbol: "text.alignleft", help: "Text only (⌘2)", enabled: textEnabled)
             segment(.split, symbol: "rectangle.split.2x1", help: "Split view (⌘3)", enabled: splitEnabled)
         }
         .padding(2)
@@ -464,22 +467,25 @@ struct DetailView: View {
             PlaceholderView()
         } else {
             // One seamless box: a single surface hosts both panes, divided
-            // only by the split divider. The PDF on the right owns the page;
+            // only by the split divider. The PDF on the left owns the page;
             // the text panel mirrors it.
             HSplitView {
-                if model.expandedPane != .original {
-                    textPane
-                        .frame(minWidth: 380,
-                               idealWidth: 420,
-                               maxWidth: model.expandedPane == .text ? .infinity : 560,
-                               maxHeight: .infinity)
-                        .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
-                }
                 if model.expandedPane != .text {
                     VStack(spacing: 0) {
                         PageView(sharedController: splitController)
                     }
-                    .frame(minWidth: 330, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 380,
+                           idealWidth: 480,
+                           maxWidth: .infinity,
+                           maxHeight: .infinity)
+                }
+                if model.expandedPane != .original {
+                    textPane
+                        .frame(minWidth: 330,
+                               idealWidth: 420,
+                               maxWidth: model.expandedPane == .text ? .infinity : 560,
+                               maxHeight: .infinity)
+                        .background(ReaderSplitAutosave(documentID: model.library.active ?? "current"))
                 }
             }
             .background(ReaderTheme.surface,
@@ -602,12 +608,70 @@ struct PlaceholderView: View {
                     .padding(.horizontal, 32)
                     .padding(.vertical, 40)
                     .frame(maxWidth: 860)
+
+                    WelcomeModelSetup()
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 12)
+                        .frame(maxWidth: 860)
+
                     Spacer(minLength: 28)
                 }
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
         }
         .onAppear { importFocused = true }
+    }
+}
+
+/// Shows any models the user removed or hasn't downloaded yet, right on the
+/// page they land on, instead of hiding the offer inside Settings.
+private struct WelcomeModelSetup: View {
+    @EnvironmentObject private var model: ReaderModel
+
+    private var missing: [String] {
+        ["speech", "ocr"].filter { key in
+            (key == "speech" ? model.setup.speech : model.setup.ocr)?.state != "ready"
+        }
+    }
+
+    var body: some View {
+        if !missing.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("SET UP ON THIS MAC")
+                        .font(ReaderTheme.micro(9))
+                        .tracking(1.4)
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                    Text("Download the models you need")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Follow me needs the speech model. Handwriting recognition is optional for scans. Neither downloads on its own.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(ReaderTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(missing, id: \.self) { key in
+                        ModelCard(key: key, showsDetails: false)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(ReaderTheme.canvas,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+                            }
+                    }
+                }
+            }
+            .padding(18)
+            .background(ReaderTheme.surface,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(ReaderTheme.hairline, lineWidth: 1)
+            }
+        }
     }
 }
 
@@ -997,7 +1061,7 @@ private struct ReaderSplitAutosave: NSViewRepresentable {
                    split.bounds.width > 0 {
                     guard configuredName != name else { return }
                     configuredName = name
-                    let key = "ReadAlong.readerSplit.v4.\(name)"
+                    let key = "ReadAlong.readerSplit.v5.\(name)"
                     split.autosaveName = NSSplitView.AutosaveName(key)
                     split.dividerStyle = .thin
                     return

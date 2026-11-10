@@ -37,6 +37,16 @@ final class ReaderModel: ObservableObject {
     // MARK: published state
 
     @Published var library = LibraryPayload(active: nil, documents: [])
+    @Published var sidebarVisible = true
+    @Published var libraryQuery = "" {
+        didSet {
+            // Never leave a hidden document selected: a later Delete would
+            // remove rows the user can no longer see.
+            let visible = Set(filteredDocuments.map(\.id))
+            selectedDocumentIDs.formIntersection(visible)
+            if let anchor = selectionAnchor, !visible.contains(anchor) { selectionAnchor = nil }
+        }
+    }
     @Published var pageModel = PageModel()
     @Published var state = ReaderState()
     @Published var setup = SetupStatus()
@@ -50,7 +60,9 @@ final class ReaderModel: ObservableObject {
     var presentEnteredFullscreen = false
     @Published var showEdit = false
     @Published var pendingRename: Document?
-    @Published var pendingDelete: Document?
+    @Published var pendingDelete: [Document]?
+    /// Documents ticked for a batch action (Cmd+A / Cmd-click in the sidebar).
+    @Published var selectedDocumentIDs: Set<String> = []
     @Published var pendingRemove: String?
     @Published var toast: Toast?
     @Published var microphones = Microphones()
@@ -61,8 +73,9 @@ final class ReaderModel: ObservableObject {
     @Published var viewer = ViewerState() {
         didSet { scheduleViewerSave() }
     }
-    /// nil = split, .text = text only, .original = source only.
-    @Published var expandedPane: ViewPane?
+    /// Original leads on first visit; nil = split, .text = text only,
+    /// .original = source only.
+    @Published var expandedPane: ViewPane? = .original
     @Published var documentLoadingMessage: String?
     /// Document the user just clicked while its model is still loading.
     @Published var openingDocumentID: String?
@@ -103,6 +116,8 @@ final class ReaderModel: ObservableObject {
     private var pageImagesDocID = ""
     private var pageImageGeneration = 0
     private var documentGeneration = 0
+    /// Last row clicked; the fixed end of Shift-click range selection.
+    private var selectionAnchor: String?
     private var pendingOpenID: String?
     private var openTask: Task<Void, Never>?
     private var sourceTask: Task<Void, Never>?
@@ -149,6 +164,11 @@ final class ReaderModel: ObservableObject {
 
     var isPlaying: Bool {
         transportState.isActive
+    }
+
+    /// True while a model download is in flight, so setup status can be polled.
+    var hasModelActivity: Bool {
+        [setup.speech, setup.ocr].compactMap { $0 }.contains { $0.isBusy }
     }
 
     var hasSource: Bool { activeDoc != nil || sourceURL != nil }
@@ -365,6 +385,9 @@ final class ReaderModel: ObservableObject {
         await loadModel()
         await pollStateOnce()
         await refreshSetup()
+        if setup.first_run == true {
+            modelSetupKey = "welcome"
+        }
         await refreshPageImage()
         await refreshMicrophones()
         pollTask = Task { [weak self] in await self?.pollLoop() }
@@ -388,6 +411,7 @@ final class ReaderModel: ObservableObject {
 
     private func pollLoop() async {
         var libraryClock = Date()
+        var setupClock = Date()
         while !Task.isCancelled {
             let busy = isPlaying || state.status == "listening"
             let interval: UInt64 = !activeWindow ? 1_200_000_000 : (busy ? 120_000_000 : 400_000_000)
@@ -401,6 +425,10 @@ final class ReaderModel: ObservableObject {
                     libraryClock = Date()
                     await refreshLibrary(quiet: true)
                 }
+            }
+            if hasModelActivity, Date().timeIntervalSince(setupClock) > 1.0 {
+                setupClock = Date()
+                await refreshSetup()
             }
         }
     }
@@ -480,6 +508,11 @@ final class ReaderModel: ObservableObject {
         let generation = documentGeneration
         guard let payload = try? await client.library() else { return }
         guard generation == documentGeneration else { return }
+        let live = Set(payload.documents.map(\.id))
+        if !selectedDocumentIDs.isSubset(of: live) {
+            selectedDocumentIDs.formIntersection(live)
+        }
+        if let anchor = selectionAnchor, !live.contains(anchor) { selectionAnchor = nil }
         let ids = payload.documents.map(\.id)
         let current = library.documents.map(\.id)
         if !quiet || ids != current || library.active != payload.active {
@@ -644,18 +677,113 @@ final class ReaderModel: ObservableObject {
         }
     }
 
-    func deleteDocument(_ doc: Document) {
+    /// Rows the sidebar currently shows, in display order.
+    var filteredDocuments: [Document] {
+        let search = libraryQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !search.isEmpty else { return library.documents }
+        return library.documents.filter {
+            $0.title.localizedStandardContains(search) || ($0.file_name?.localizedStandardContains(search) ?? false)
+        }
+    }
+
+    func selectAllDocuments() {
+        let visible = filteredDocuments
+        selectedDocumentIDs = Set(visible.map(\.id))
+        selectionAnchor = visible.first?.id
+    }
+
+    func clearDocumentSelection() {
+        selectedDocumentIDs.removeAll()
+        selectionAnchor = nil
+    }
+
+    /// A row click: plain selects and opens, Cmd toggles, Shift extends from
+    /// the anchor. Only a plain click navigates, so selecting never opens.
+    func selectDocument(_ id: String, command: Bool, shift: Bool) {
+        let ordered = filteredDocuments.map(\.id)
+        if shift {
+            if let anchor = selectionAnchor,
+               let from = ordered.firstIndex(of: anchor),
+               let to = ordered.firstIndex(of: id) {
+                let range = Set(ordered[min(from, to)...max(from, to)])
+                selectedDocumentIDs = command ? selectedDocumentIDs.union(range) : range
+            } else {
+                selectedDocumentIDs = [id]
+                selectionAnchor = id
+            }
+            return
+        }
+        if command {
+            if selectedDocumentIDs.contains(id) {
+                selectedDocumentIDs.remove(id)
+            } else {
+                selectedDocumentIDs.insert(id)
+            }
+            selectionAnchor = id
+            return
+        }
+        selectedDocumentIDs = [id]
+        selectionAnchor = id
+        openDocument(id)
+    }
+
+    /// Live marquee results. Cmd-drag keeps adding as the box grows.
+    func selectDocumentsFromDrag(_ ids: Set<String>, additive: Bool) {
+        selectedDocumentIDs = additive ? selectedDocumentIDs.union(ids) : ids
+        if !ids.isEmpty {
+            selectionAnchor = filteredDocuments.first { ids.contains($0.id) }?.id
+        } else if !additive {
+            selectionAnchor = nil
+        }
+    }
+
+    func requestDeleteSelectedDocuments() {
+        let docs = filteredDocuments.filter { selectedDocumentIDs.contains($0.id) }
+        guard !docs.isEmpty else { return }
+        pendingDelete = docs
+    }
+
+    func deleteDocuments(_ docs: [Document]) {
         pendingDelete = nil
+        guard !docs.isEmpty, let client else { return }
+        let deleting = Set(docs.map(\.id))
+        // Finder behavior: after the rows go, select the row that takes the
+        // first deleted row's place.
+        let firstDeletedRow = filteredDocuments.firstIndex { deleting.contains($0.id) }
+        // Delete the open document last: each delete of the active document
+        // makes the backend load the next one, which can start OCR and then
+        // block the following delete.
+        let ordered = docs.filter { $0.id != library.active } + docs.filter { $0.id == library.active }
         Task {
-            do {
-                try await client?.deleteDocument(id: doc.id)
-                await refreshLibrary()
-                await loadModel()
-                await pollStateOnce()
-                showToast("Document deleted")
+            var deleted: Set<String> = []
+            var firstError: String?
+            for doc in ordered {
+                do {
+                    try await client.deleteDocument(id: doc.id)
+                    deleted.insert(doc.id)
+                } catch {
+                    if firstError == nil { firstError = error.localizedDescription }
+                }
+            }
+            let failed = ordered.count - deleted.count
+            await refreshLibrary()
+            await loadModel()
+            await pollStateOnce()
+            if failed == 0 {
+                selectedDocumentIDs.removeAll()
+                selectionAnchor = nil
+                let remaining = filteredDocuments
+                if let row = firstDeletedRow, !remaining.isEmpty {
+                    let survivor = remaining[min(row, remaining.count - 1)].id
+                    selectedDocumentIDs = [survivor]
+                    selectionAnchor = survivor
+                }
+                showToast(ordered.count == 1 ? "Document deleted" : "\(ordered.count) documents deleted")
                 feedback(.success)
-            } catch {
-                showToast(error.localizedDescription, isError: true)
+            } else {
+                let prefix = failed == ordered.count ? "" : "Deleted \(ordered.count - failed) of \(ordered.count). "
+                showToast(prefix + (firstError ?? "Couldn’t delete the selected documents."), isError: true)
+                feedback(.error)
             }
         }
     }
@@ -666,7 +794,14 @@ final class ReaderModel: ObservableObject {
     }
 
     func cancelModel(_ key: String) {
-        Task { _ = try? await client?.cancelModel(key) }
+        Task {
+            do {
+                try await client?.cancelModel(key)
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            await refreshSetup()
+        }
     }
     func dismissOperationError() { operationError = nil }
     func findInDocument(_ query: String = "") {
@@ -828,7 +963,7 @@ final class ReaderModel: ObservableObject {
         }
         if state.status == "loading" { return }
         if state.speech_ready == false {
-            showToast("Follow me needs the local speech model.", isError: true)
+            modelSetupKey = "speech"
             return
         }
         // English-only disclosure

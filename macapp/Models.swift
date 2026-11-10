@@ -180,6 +180,11 @@ struct ModelStatus: Decodable, Equatable {
     var error: String? = nil
     var can_cancel: Bool? = nil
     var progress_is_approximate: Bool? = nil
+
+    /// True while a download, install, verify, or removal is in flight.
+    var isBusy: Bool {
+        ["preparing", "downloading", "verifying", "installing", "removing"].contains(state ?? "")
+    }
 }
 
 struct ImportResponse: Decodable {

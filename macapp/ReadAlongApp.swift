@@ -55,6 +55,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private static func handleReaderKey(_ event: NSEvent) -> NSEvent? {
+        let model = ReaderModel.shared
+        if model.sidebarVisible,
+           let window = event.window, window == NSApp.mainWindow,
+           window.attachedSheet == nil {
+            let responder = window.firstResponder
+            let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // Cmd+A / Ctrl+A selects the library. Text views keep their own
+            // select-all, so only act when no text control owns the keyboard.
+            if (flags == .command || flags == .control),
+               event.charactersIgnoringModifiers?.lowercased() == "a",
+               !(responder is NSTextView), !(responder is NSControl) {
+                model.selectAllDocuments()
+                return nil
+            }
+        }
         guard !event.isARepeat,
               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
               let window = event.window, window == NSApp.mainWindow,
@@ -62,12 +77,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let responder = window.firstResponder,
               !(responder is NSControl),
               !((responder as? NSTextView)?.isEditable ?? false) else { return event }
+        if event.keyCode == 51 || event.keyCode == 117,
+           model.sidebarVisible, !model.selectedDocumentIDs.isEmpty {
+            model.requestDeleteSelectedDocuments()
+            return nil
+        }
         if event.keyCode == 123 || event.keyCode == 124,
            let source = SourceFocus.active, source.window === window {
             if event.keyCode == 123 { source.controller?.goPrev() } else { source.controller?.goNext() }
             return nil
         }
-        let model = ReaderModel.shared
         guard model.canRead else { return event }
         switch event.charactersIgnoringModifiers {
         case " ": model.togglePlay(); return nil
@@ -160,9 +179,15 @@ struct ReadAlongApp: App {
                 [ / ] in the reading canvas, or Cmd+[ / Cmd+]: previous/next phrase
                 Left/Right: browse source pages when source owns input
                 Cmd+O: import document
+                Cmd+A or Ctrl+A: select all visible documents in the library
+                Cmd-click: add or remove one document from the selection
+                Shift-click: select a range of documents
+                Drag across the library: select documents (Cmd adds)
+                Click empty space: clear the selection
+                Delete: delete selected documents from the app
                 Cmd+E: edit text
                 Shift+Cmd+E: export page as JPEG
-                Cmd+1/2/3: Text / Original / Split
+                Cmd+1/2/3: Original / Text / Split
                 Shift+Cmd+F: Focus
                 Cmd+F: Find (in text)
                 Cmd+Plus/Minus/Equals: zoom focused pane
@@ -179,11 +204,11 @@ struct ReadAlongApp: App {
             }
             .disabled(ReaderModel.shared.pageModel.words.isEmpty)
             Divider()
-            Button("Text View") { ReaderModel.shared.expandedPane = .text }
-                .keyboardShortcut("1", modifiers: .command)
-                .disabled(ReaderModel.shared.pageModel.words.isEmpty)
             Button("Original View") { ReaderModel.shared.expandedPane = .original }
+                .keyboardShortcut("1", modifiers: .command)
+            Button("Text View") { ReaderModel.shared.expandedPane = .text }
                 .keyboardShortcut("2", modifiers: .command)
+                .disabled(ReaderModel.shared.pageModel.words.isEmpty)
             Button("Split View") { ReaderModel.shared.expandedPane = nil }
                 .keyboardShortcut("3", modifiers: .command)
                 .disabled(ReaderModel.shared.pageModel.words.isEmpty)

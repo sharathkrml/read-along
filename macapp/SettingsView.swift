@@ -20,7 +20,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .reading: return "Type, size, and the guide that follows your voice."
         case .voice: return "The microphone used when you read aloud."
         case .appearance: return "Theme, sound, and haptics."
-        case .processing: return "How new pages are read and which models are installed."
+        case .processing: return "Text recovery and the local speech and handwriting models."
         case .about: return "Version, privacy, and model licenses."
         }
     }
@@ -247,6 +247,10 @@ struct SettingsView: View {
                     .foregroundStyle(ReaderTheme.warning)
             }
             SettingsDivider()
+            SettingsRow("Speech to text", detail: speechModelDetail) {
+                speechModelControl
+            }
+            SettingsDivider()
             HStack {
                 Text("Microphone access").font(.system(size: 12.5))
                 Spacer()
@@ -325,10 +329,13 @@ struct SettingsView: View {
                 .frame(maxWidth: 240, alignment: .leading)
             }
 
-            SettingsCard(title: "Optional model") {
-                Text("Text PDFs work without either model. Downloads are never started automatically.")
+            SettingsCard(title: "Models",
+                         footer: "Reading text works without either model. Downloads are never started automatically.") {
+                Text("Follow me needs the speech model. Handwriting recognition is only used for scans and difficult pages.")
                     .font(.system(size: 11))
                     .foregroundStyle(ReaderTheme.secondaryText)
+                ModelCard(key: "speech")
+                SettingsDivider()
                 ModelCard(key: "ocr")
             }
         }
@@ -385,6 +392,43 @@ struct SettingsView: View {
         case .restricted: return "Restricted by this Mac"
         case .notDetermined: return "Not requested"
         @unknown default: return "Unknown"
+        }
+    }
+
+    private var speechModelPhase: ModelInstallPhase {
+        ModelInstallPhase(model.setup.speech?.state)
+    }
+
+    private var speechModelDetail: String {
+        switch speechModelPhase {
+        case .ready: return "Phonon-2.5 English · installed on this Mac · about 158 MB"
+        case .preparing, .downloading, .verifying, .installing, .removing:
+            return speechModelPhase.label
+        case .missing, .checking, .interrupted, .canceled, .error:
+            return "Phonon-2.5 English · needed for Follow me · about 158 MB"
+        }
+    }
+
+    @ViewBuilder private var speechModelControl: some View {
+        switch speechModelPhase {
+        case .ready:
+            Label("Installed", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(ReaderTheme.success)
+        case .preparing, .downloading, .verifying, .installing, .removing:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.mini)
+                Text(speechModelPhase.label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+            }
+        case .missing, .error, .interrupted, .canceled:
+            Button("Download") { model.downloadModel("speech") }
+                .buttonStyle(StudioSecondaryButtonStyle())
+                .disabled(!model.ready)
+        case .checking:
+            Button("Check again") { model.refreshSetupAction() }
+                .buttonStyle(StudioSecondaryButtonStyle())
         }
     }
 }
@@ -537,120 +581,151 @@ enum ModelInstallPhase {
 struct ModelCard: View {
     @EnvironmentObject private var model: ReaderModel
     let key: String
+    var showsDetails = true
 
-    private var status: ModelStatus? { model.setup.ocr }
+    private var isSpeech: Bool { key == "speech" }
+    private var status: ModelStatus? { isSpeech ? model.setup.speech : model.setup.ocr }
     private var phase: ModelInstallPhase { ModelInstallPhase(status?.state) }
-    private var title: String { "Handwriting recognition" }
+    private var title: String { isSpeech ? "Speech to text" : "Handwriting recognition" }
+    private var modelName: String {
+        isSpeech ? "Phonon-2.5 English · about 158 MB" : "LFM3-VL 2B · about 1.6 GB"
+    }
+    private var summary: String {
+        isSpeech ? "Follows your voice as you read." : "Reads handwriting and scans."
+    }
+    private var symbol: String { isSpeech ? "waveform" : "pencil.and.outline" }
+    private var hasDownloadDetail: Bool {
+        phase == .downloading || phase == .verifying || phase == .installing
+            || phase == .error || !(status?.error ?? "").isEmpty
+            || phase == .interrupted || phase == .canceled
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top, spacing: 11) {
-                Image(systemName: "pencil.and.outline")
+                Image(systemName: symbol)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(ReaderTheme.accent)
                     .frame(width: 32, height: 32)
                     .background(ReaderTheme.accentSoft, in: Circle())
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
-                    Text("For handwriting and difficult scans · about 1.6 GB")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                    Text(modelName)
                         .font(.system(size: 10.5))
                         .foregroundStyle(ReaderTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                    Text(summary)
+                        .font(.system(size: 10))
+                        .foregroundStyle(ReaderTheme.tertiaryText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .padding(.bottom, 3)
+
+                    HStack(spacing: 8) {
+                        if phase.busy {
+                            ProgressView().controlSize(.mini).tint(ReaderTheme.accent)
+                        } else if phase == .ready {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ReaderTheme.success)
+                        }
+                        Text(phase.label)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(phase == .ready ? ReaderTheme.success : ReaderTheme.secondaryText)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
                 Spacer(minLength: 0)
                 actions
             }
 
-            HStack(spacing: 8) {
-                if phase.busy {
-                    ProgressView().controlSize(.mini).tint(ReaderTheme.accent)
-                } else if phase == .ready {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(ReaderTheme.success)
-                }
-                Text(phase.label)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(phase == .ready ? ReaderTheme.success : ReaderTheme.secondaryText)
-            }
-            .accessibilityElement(children: .combine)
-
-            if phase == .downloading {
-                if let progress = Self.downloadProgress(status) {
-                    ProgressView(value: progress)
-                        .tint(ReaderTheme.accent)
-                        .accessibilityLabel("\(title) download")
-                        .accessibilityValue(status?.progress_is_approximate == false ? "\(Int(progress * 100)) percent" : "About \(Int(progress * 100)) percent")
-                }
-                Text(downloadBytes)
-                    .font(ReaderTheme.numeral(10))
-                    .foregroundStyle(ReaderTheme.secondaryText)
-            }
-            if phase == .verifying || phase == .installing {
-                Text("The download is being checked and prepared before it can be used.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(ReaderTheme.secondaryText)
-            }
-            if phase == .error || !(status?.error ?? "").isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("The model action couldn’t finish.", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(ReaderTheme.warning)
-                    Text("Check your connection and available storage, then try again. You can keep reading available text.")
-                        .foregroundStyle(ReaderTheme.secondaryText)
-                    if let error = status?.error, !error.isEmpty {
-                        DisclosureGroup("Error details") {
-                            Text(error).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                .font(.system(size: 10.5))
-            }
-            if phase == .interrupted || phase == .canceled {
-                Text("Retry when you’re ready. Available documents are still readable.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(ReaderTheme.secondaryText)
-            }
-
-            DisclosureGroup("Advanced details") {
+            if hasDownloadDetail {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(key == "speech" ? "FermionResearch/Phonon-2.5-English" : "LiquidAI/LFM3-VL-2B-MLX-4bit")
-                        .textSelection(.enabled)
-                    Link(key == "speech" ? "CC BY 4.0 weights · Apache 2.0 code" : "LFM 1.0 model license",
-                         destination: URL(string: key == "speech"
-                                          ? "https://huggingface.co/FermionResearch/Phonon-2.5-English"
-                                          : "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
-                    if phase == .ready, let bytes = status?.bytes {
-                        Text("Installed disk usage: \(Self.formattedBytes(bytes))")
-                    }
-                    if let path = status?.path, !path.isEmpty {
-                        Text(path).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    }
-                    if Self.validatedModelURL(status?.path, key: key) != nil {
-                        Button("Reveal in Finder") {
-                            guard let url = Self.validatedModelURL(status?.path, key: key) else { return }
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                    if phase == .downloading {
+                        if let progress = Self.downloadProgress(status) {
+                            ProgressView(value: progress)
+                                .tint(ReaderTheme.accent)
+                                .accessibilityLabel("\(title) download")
+                                .accessibilityValue(status?.progress_is_approximate == false ? "\(Int(progress * 100)) percent" : "About \(Int(progress * 100)) percent")
                         }
+                        Text(downloadBytes)
+                            .font(ReaderTheme.numeral(10))
+                            .foregroundStyle(ReaderTheme.secondaryText)
                     }
-                    if phase == .ready {
-                        Button("Remove model…", role: .destructive) { model.pendingRemove = key }
-                            .disabled(removalBlocked)
-                            .help(removalBlocked ? "Stop the operation using this model before removing it." : "Remove only this model; keep your documents.")
-                        if removalBlocked {
-                            Text("Stop \(key == "speech" ? "Follow me" : "text recovery") before removing this model.")
+                    if phase == .verifying || phase == .installing {
+                        Text("The download is being checked and prepared before it can be used.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(ReaderTheme.secondaryText)
+                    }
+                    if phase == .error || !(status?.error ?? "").isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("The model action couldn’t finish.", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(ReaderTheme.warning)
+                            Text("Check your connection and available storage, then try again. You can keep reading available text.")
+                                .foregroundStyle(ReaderTheme.secondaryText)
+                            if let error = status?.error, !error.isEmpty {
+                                DisclosureGroup("Error details") {
+                                    Text(error).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
                         }
+                        .font(.system(size: 10.5))
+                    }
+                    if phase == .interrupted || phase == .canceled {
+                        Text("Retry when you’re ready. Available documents are still readable.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(ReaderTheme.secondaryText)
                     }
                 }
-                .font(.system(size: 10.5))
-                .foregroundStyle(ReaderTheme.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
+                .padding(.leading, 43)
             }
-            .font(.system(size: 11))
+
+            if showsDetails {
+                DisclosureGroup("Advanced details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(key == "speech" ? "FermionResearch/Phonon-2.5-English" : "LiquidAI/LFM3-VL-2B-MLX-4bit")
+                            .textSelection(.enabled)
+                        Link(key == "speech" ? "CC BY 4.0 weights · Apache 2.0 code" : "LFM 1.0 model license",
+                             destination: URL(string: key == "speech"
+                                              ? "https://huggingface.co/FermionResearch/Phonon-2.5-English"
+                                              : "https://huggingface.co/LiquidAI/LFM3-VL-2B-MLX-4bit/blob/main/LICENSE")!)
+                        if phase == .ready, let bytes = status?.bytes {
+                            Text("Installed disk usage: \(Self.formattedBytes(bytes))")
+                        }
+                        if let path = status?.path, !path.isEmpty {
+                            Text(path).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        }
+                        if Self.validatedModelURL(status?.path, key: key) != nil {
+                            Button("Reveal in Finder") {
+                                guard let url = Self.validatedModelURL(status?.path, key: key) else { return }
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                        }
+                        if phase == .ready {
+                            Button("Remove model…", role: .destructive) { model.pendingRemove = key }
+                                .disabled(removalBlocked)
+                                .help(removalBlocked ? "Stop the operation using this model before removing it." : "Remove only this model; keep your documents.")
+                            if removalBlocked {
+                                Text("Stop \(key == "speech" ? "Follow me" : "text recovery") before removing this model.")
+                            }
+                        }
+                    }
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ReaderTheme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+                }
+                .font(.system(size: 11))
+                .padding(.leading, 43)
+            }
         }
         .padding(.vertical, 4)
-        .confirmationDialog("Remove handwriting model?", isPresented: confirmBinding, titleVisibility: .visible) {
+        .confirmationDialog("Remove “\(title)”?", isPresented: confirmBinding, titleVisibility: .visible) {
             Button("Remove \(title)", role: .destructive) {
                 guard model.pendingRemove == key, !removalBlocked else { return }
                 model.pendingRemove = nil
@@ -691,12 +766,17 @@ struct ModelCard: View {
     }
 
     private var removalBlocked: Bool {
+        if isSpeech {
+            return model.isPlaying || model.state.status == "listening"
+        }
         return ["running", "processing", "loading"].contains(model.state.ocr_status ?? "")
             || model.library.documents.contains { $0.statusName == "processing" }
     }
 
     private var removalMessage: String {
-        "Saved recovered text remains available. Recovering handwriting again may require another download."
+        isSpeech
+            ? "Follow me will need this model again the next time you read aloud. Your documents stay untouched."
+            : "Saved recovered text remains available. Recovering handwriting again may require another download."
     }
 
     private var confirmBinding: Binding<Bool> {
@@ -724,8 +804,15 @@ struct ModelCard: View {
         guard let path, path.hasPrefix("/"), !path.contains("\0") else { return nil }
         let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         let parts = url.pathComponents
-        let knownModel = parts.contains("models--LiquidAI--LFM3-VL-2B-MLX-4bit")
-            || (url.lastPathComponent == "ocr" && url.deletingLastPathComponent().lastPathComponent == "models")
+        let knownModel: Bool
+        if key == "speech" {
+            knownModel = parts.contains { $0.contains("Phonon-2.5-English") }
+                || (url.lastPathComponent == "speech"
+                    && url.deletingLastPathComponent().lastPathComponent == "fermion")
+        } else {
+            knownModel = parts.contains("models--LiquidAI--LFM3-VL-2B-MLX-4bit")
+                || (url.lastPathComponent == "ocr" && url.deletingLastPathComponent().lastPathComponent == "models")
+        }
         var directory: ObjCBool = false
         guard knownModel, FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { return nil }
         return url

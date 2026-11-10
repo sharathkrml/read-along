@@ -81,7 +81,7 @@ flowchart LR
 One page window, driven by one Python process:
 
 - The app window: **Library** sidebar (source list with document rows),
-  **Text / Original / Split** panes, and a bottom **reader bar**.
+  **Original / Text / Split** panes, and a bottom **reader bar**.
 - **Read to me** uses an installed macOS voice; **Follow me** uses the live
   microphone pipeline. Both share one cursor and saved position.
 - Each document has its own source, page images, cache, and saved position.
@@ -144,7 +144,7 @@ read-along/                         repository root
     SettingsView.swift              preferences (reading, voice, appearance, models)
     SidebarView.swift               document library sidebar
     SourceViewer.swift              PDF + image source viewers + toolbar
-    TextPanel.swift                 left-hand reading text panel
+    TextPanel.swift                 right-hand reading text panel
     UnifiedReaderView.swift         single-scrollbar unified reader
     EditSheet.swift                 per-page OCR correction sheet
     AudioCapture.swift              mic capture -> WebSocket to ASR
@@ -679,7 +679,7 @@ The UI is the native SwiftUI shell in `macapp/`:
 ```
 NavigationSplitView
   sidebar: source-list library, import, per-document actions
-  toolbar: Text / Original / Split, Present, Edit, Import, Settings
+  toolbar: Original / Text / Split, Present, Edit, Import, Settings
   detail:  reading text (NSTextView), page image with box overlay, split
   bottom:  Read to me / Follow me, transport, voice/speed, progress
 ```

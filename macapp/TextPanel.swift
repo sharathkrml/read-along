@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The left-hand text panel. The PDF on the right is the source of truth:
+/// The right-hand text panel. The PDF on the left is the source of truth:
 /// this panel only ever mirrors the text on the page the PDF is showing
 /// (`model.displayPage`). While reading it is a highlighted, click-to-jump
 /// view; with Edit it becomes an inline editor for that page, so an OCR
@@ -164,7 +164,7 @@ struct TextPanel: View {
             Text("No text on page \(page + 1)")
                 .font(.system(size: 14, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("No text was recovered for this page. Type it here and save — the original on the right stays the source of truth.")
+            Text("No text was recovered for this page. Type it here and save — the original on the left stays the source of truth.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(ReaderTheme.secondaryText)
                 .multilineTextAlignment(.center)
